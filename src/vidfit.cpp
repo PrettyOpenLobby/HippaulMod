@@ -101,6 +101,8 @@
 struct GraphSlot {
     IFilterGraph* fg;
     bool          placed;
+    bool          windowed;    // placed through IVideoWindow (a real child window)
+    bool          put_away;    // we hid that window when its clip ended
     long          cw, ch;      // the game client we placed against
     // --- probe state (d3d_videoprobe), all "last seen" so we log CHANGES only
     long          st;          // OAFilterState + 1; 0 = never read
@@ -204,7 +206,8 @@ void vidfit_note_graph(void* punk)
         fg->Release();                       // already held; drop the extra ref
     } else if (g_ngraphs < VIDFIT_MAX_GRAPHS) {
         GraphSlot* s = &g_graphs[g_ngraphs++];
-        s->fg = fg; s->placed = false; s->cw = 0; s->ch = 0;
+        s->fg = fg; s->placed = false; s->windowed = false; s->put_away = false;
+        s->cw = 0; s->ch = 0;
         s->st = 0; s->vis = -1; s->named = false; ZeroMemory(&s->rc, sizeof(s->rc));
         logf("[vidfit] tracking filter graph %p (%d held) -- %s",
              (void*)fg, g_ngraphs,
@@ -215,7 +218,8 @@ void vidfit_note_graph(void* punk)
         g_graphs[0].fg->Release();
         memmove(&g_graphs[0], &g_graphs[1], sizeof(g_graphs[0]) * (VIDFIT_MAX_GRAPHS - 1));
         GraphSlot* s = &g_graphs[VIDFIT_MAX_GRAPHS - 1];
-        s->fg = fg; s->placed = false; s->cw = 0; s->ch = 0;
+        s->fg = fg; s->placed = false; s->windowed = false; s->put_away = false;
+        s->cw = 0; s->ch = 0;
         s->st = 0; s->vis = -1; s->named = false; ZeroMemory(&s->rc, sizeof(s->rc));
     }
     LeaveCriticalSection(&g_lock);
@@ -456,6 +460,96 @@ static void probe_graph(GraphSlot* s)
     s->vis = vis;
 }
 
+// PUT THE WINDOW AWAY WHEN THE CLIP ENDS.
+//
+// Measured 2026-09-26 from a player's problem report (native Windows, b179):
+// Fantasy Earth's opening movie was
+// placed at (0,33 800x533) over the 800x600 client, and for the rest of the
+// session the pointer showed ONLY in the 33px letterbox band at the top. The log
+// holds ~7,700 `SetCursor(NULL) by quartz.dll+0xE28F7`, every one after the
+// placement: the renderer window was still a VISIBLE child over the game, and it
+// blanks the pointer over itself on every WM_SETCURSOR. D3D presents straight
+// over it (FE's window has no WS_CLIPCHILDREN), so the screen looks right and
+// only the pointer and hit-testing see the window.
+//
+// Before placement FE had it at (560,284) in the owner's client coordinates,
+// i.e. wholly outside the 800x600 client, so a video window FE never hides was
+// harmless. Moving it INTO the client -- and forcing WS_VISIBLE on it -- made its
+// lifetime our problem, and we also hold a reference that keeps the graph (and
+// its window) alive after the title lets go. So when the clip is over, hide it.
+//
+// Only HIDES, never shows, moves or stops anything: the renderer's own AutoShow
+// brings the window back if the title runs the graph again, and put_away re-arms
+// once the graph is seen playing, so a replay is put away at its end too.
+static bool clip_over(IFilterGraph* fg, bool* playing)
+{
+    *playing = false;
+    OAFilterState fs = State_Stopped;
+    bool have_state = false;
+    IMediaControl* mc = NULL;
+    if (SUCCEEDED(fg->QueryInterface(IID_IMediaControl, (void**)&mc)) && mc) {
+        if (SUCCEEDED(mc->GetState(0, &fs))) have_state = true;
+        mc->Release();
+    }
+    if (have_state && fs == State_Stopped) return true;
+    // A title may leave a finished clip RUNNING (or PAUSED) on its last frame
+    // rather than stopping it, so the state alone cannot say it is over.
+    bool at_end = false;
+    IMediaSeeking* ms = NULL;
+    if (SUCCEEDED(fg->QueryInterface(IID_IMediaSeeking, (void**)&ms)) && ms) {
+        LONGLONG cur = 0, stop = 0;
+        if (SUCCEEDED(ms->GetCurrentPosition(&cur)) &&
+            SUCCEEDED(ms->GetStopPosition(&stop)) && stop > 0 && cur >= stop)
+            at_end = true;
+        ms->Release();
+    }
+    if (!at_end && have_state && fs == State_Running) *playing = true;
+    return at_end;
+}
+
+static void put_away_finished(void)
+{
+    IFilterGraph* snap[VIDFIT_MAX_GRAPHS];
+    int n = 0;
+    EnterCriticalSection(&g_lock);
+    for (int i = 0; i < g_ngraphs; i++) {
+        if (!g_graphs[i].placed || !g_graphs[i].windowed) continue;
+        snap[n] = g_graphs[i].fg;
+        snap[n]->AddRef();
+        n++;
+    }
+    LeaveCriticalSection(&g_lock);
+
+    for (int i = 0; i < n; i++) {
+        bool playing = false;
+        bool over = clip_over(snap[i], &playing);
+        EnterCriticalSection(&g_lock);
+        GraphSlot* s = NULL;
+        for (int j = 0; j < g_ngraphs; j++) if (g_graphs[j].fg == snap[i]) { s = &g_graphs[j]; break; }
+        bool act = s && over && !s->put_away;
+        if (s && playing) s->put_away = false;           // a replay: re-arm
+        if (act) s->put_away = true;
+        LeaveCriticalSection(&g_lock);
+
+        if (act) {
+            IVideoWindow* vw = NULL;
+            if (SUCCEEDED(snap[i]->QueryInterface(IID_IVideoWindow, (void**)&vw)) && vw) {
+                long vis = 0;
+                // get_Visible fails once the renderer is disconnected, and then
+                // there is no window left to put away.
+                if (SUCCEEDED(vw->get_Visible(&vis)) && vis == OATRUE) {
+                    HRESULT hr = vw->put_Visible(OAFALSE);
+                    logf("[vidfit] graph %p: clip over -- hid its video window "
+                         "hr=0x%08lX (a visible renderer child over the game blanks "
+                         "the pointer over itself)", (void*)snap[i], (unsigned long)hr);
+                }
+                vw->Release();
+            }
+        }
+        snap[i]->Release();
+    }
+}
+
 void vidfit_poll(HWND game)
 {
     if ((!vidfit_enabled() && !g_probe) || !g_ngraphs || !game || !IsWindow(game)) return;
@@ -513,8 +607,8 @@ void vidfit_poll(HWND game)
     LeaveCriticalSection(&g_lock);
 
     for (int i = 0; i < n; i++) {
-        bool done = place_windowed(snap[i], game, gc.right, gc.bottom);
-        if (!done) done = place_windowless(snap[i], gc.right, gc.bottom);
+        bool windowed = place_windowed(snap[i], game, gc.right, gc.bottom);
+        bool done = windowed || place_windowless(snap[i], gc.right, gc.bottom);
         if (done) {
             EnterCriticalSection(&g_lock);
             // Re-find by POINTER: the ring may have shifted while we were out of
@@ -522,6 +616,8 @@ void vidfit_poll(HWND game)
             for (int j = 0; j < g_ngraphs; j++) {
                 if (g_graphs[j].fg != snap[i]) continue;
                 g_graphs[j].placed = true;
+                g_graphs[j].windowed = windowed;
+                g_graphs[j].put_away = false;
                 g_graphs[j].cw = gc.right;
                 g_graphs[j].ch = gc.bottom;
                 break;
@@ -530,6 +626,8 @@ void vidfit_poll(HWND game)
         }
         snap[i]->Release();
     }
+
+    put_away_finished();
 }
 
 // Release ONE held graph, and survive it being dead.
