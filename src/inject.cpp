@@ -1911,6 +1911,7 @@ static void startup()
         g_dbgstring_explicit = (v[0] != 0);
         g_dbgstring = g_dbgstring_explicit ? _wtoi(v) : trace_at(2);
     }
+    gamestart_set_cmdline(GetPrivateProfileIntW(L"polshim", L"profile_cmdline", 1, ini));
     profiles_log_table();
     polfetch_configure(ini);
     fmokey_configure(ini);
@@ -2140,6 +2141,8 @@ void shim_reload(const wchar_t* ini)
         g_dbgstring_explicit = (v[0] != 0);
         g_dbgstring = g_dbgstring_explicit ? _wtoi(v) : trace_at(2);
     }
+
+    gamestart_set_cmdline(GetPrivateProfileIntW(L"polshim", L"profile_cmdline", 1, ini));
 
     dx_reload(ini);
     d3d8_reload(ini);

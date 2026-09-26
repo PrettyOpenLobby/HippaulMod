@@ -951,12 +951,24 @@ static HRESULT WINAPI hook_CoCreateInstance(REFCLSID rclsid, LPUNKNOWN outer,
                      "now call; verified for FMO, empirical for others.",
                      cs, (unsigned long)hr, as, where);
                 log_flush();
+                // pol.exe calls this object's GameStart exactly once; a title
+                // with a command-line switch (Fantasy Earth's -windowmode)
+                // receives it inside that call. See gamestart.cpp.
+                gamestart_watch(*out, cs);
                 return hr2;
             }
             logf("[com] ALIAS %s: retry with %s from %s ALSO failed "
                  "hr=0x%08lX -- alias not applied", cs, as, where,
                  (unsigned long)hr2);
         }
+    }
+
+    // A title whose GUIDs were patched on disk never needs the alias, so it
+    // arrives here instead. Same hand-off.
+    if (SUCCEEDED(hr) && out && *out && IsEqualGUID(riid, IID_IPolContentsCom)) {
+        char cs[64];
+        guid_str(rclsid, cs, sizeof(cs));
+        gamestart_watch(*out, cs);
     }
 
     // CLSID_FilterGraph: hand the graph to vidfit, which places the title's FMV

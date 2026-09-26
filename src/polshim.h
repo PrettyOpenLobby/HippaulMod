@@ -1217,6 +1217,14 @@ void* d3d8_hook_GetWindowRect();
 // title's module and wears its icon.
 void  d3d8_new_title_launch(void);
 
+// gamestart.cpp -- hands a title its profile's command-line switch at GameStart
+// (Fantasy Earth's -windowmode). comtrace calls gamestart_watch with each content
+// object pol.exe is about to start.
+void  gamestart_watch(void* iface, const char* what);
+void  gamestart_set_cmdline(int on);  // [polshim] profile_cmdline
+int   gamestart_nw_delivered();       // a native-windowed title actually got its switch
+int   gamestart_nw_delivered_for(const char* leaf);  // ...and it was THIS module
+
 HWND  d3d8_game_window();
 LONG  d3d8_in_modal();        // the user is dragging/sizing our own frame
 void  d3d8_set_window_icon(HWND h);   // the title's / PlayOnline's own icon

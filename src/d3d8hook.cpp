@@ -1152,17 +1152,25 @@ static bool caller_except_why(void* retaddr, ExceptWhy* why)
         if (why) *why = EXC_PROFILE;
         return true;
     }
-    // PW_NATIVE_WINDOWED (Fantasy Earth): this build does not deliver SE's own
-    // -windowmode switch, so excepting the title would strand it in the
-    // exclusive-fullscreen mode it CRASHES in. Fall through and let the ordinary
-    // windowed override force it windowed the proven way instead.
+    // PW_NATIVE_WINDOWED (Fantasy Earth) is left alone ONLY if its -windowmode switch was
+    // truly delivered (gamestart.cpp). If not, excepting the title would strand it in the
+    // exclusive-fullscreen mode it CRASHES in, so fall through and let the ordinary
+    // windowed override force it windowed instead.
     if (prof && prof->window == PW_NATIVE_WINDOWED) {
         static volatile LONG said = 0;
+        bool delivered = gamestart_nw_delivered_for(leaf) != 0;
         if (say_once_per_title(&said))
-            logf("[d3d] profile: %s is native-windowed; -windowmode is not delivered "
-                 "by this build -- using the shim's windowed override so it is not "
-                 "left fullscreen", prof->title);
-        // not excepted -> the windowed override applies.
+            logf("[d3d] profile: %s is native-windowed; -windowmode %s -- %s",
+                 prof->title,
+                 delivered ? "was delivered" : "was NOT delivered",
+                 delivered ? "leaving its device alone"
+                           : "falling back to the shim's windowed override so it is not "
+                             "left fullscreen");
+        if (delivered) {
+            if (why) *why = EXC_PROFILE;
+            return true;
+        }
+        // else: not excepted -> the windowed override applies.
     }
 
     // Unreachable for a listed module now that the except list is read at the top,
@@ -2257,7 +2265,7 @@ static void schedule_mask_align()
 static void apply_black_class_brush(HWND h)
 {
     if (!h || !IsWindow(h)) return;
-    if (!g_d3d_blackbg) return;
+    if (!g_d3d_blackbg || gamestart_nw_delivered_for(g_title_leaf)) return;
     HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
     HBRUSH old = (HBRUSH)SetClassLongPtrA(h, GCLP_HBRBACKGROUND, (LONG_PTR)black);
 
@@ -4207,7 +4215,7 @@ static BOOL WINAPI hook_SetCursorPos(int x, int y)
         return TRUE;
     }
     POINT o; int cw, ch, bw, bh;
-    if (!InterlockedCompareExchange(&g_in_modal, 0, 0) && client_map(&o, &cw, &ch, &bw, &bh)) {
+    if (!gamestart_nw_delivered_for(g_title_leaf) && !InterlockedCompareExchange(&g_in_modal, 0, 0) && client_map(&o, &cw, &ch, &bw, &bh)) {
         // Backbuffer space -> client pixels -> screen. The inverse of the read
         // path below, scale included.
         int sx = MulDiv(x, cw, bw) + o.x;
@@ -4280,7 +4288,7 @@ static BOOL WINAPI hook_GetCursorPos(LPPOINT p)
         }
     }
     POINT o; int cw, ch, bw, bh;
-    if (r && p && !InterlockedCompareExchange(&g_in_modal, 0, 0) && client_map(&o, &cw, &ch, &bw, &bh)) {
+    if (r && p && !gamestart_nw_delivered_for(g_title_leaf) && !InterlockedCompareExchange(&g_in_modal, 0, 0) && client_map(&o, &cw, &ch, &bw, &bh)) {
         // Screen -> client pixels -> BACKBUFFER space. The second step is the one
         // that was missing; without it a 2x window reports every coordinate at
         // twice its true value in the field the client reads it against.
@@ -4728,7 +4736,7 @@ static LRESULT CALLBACK spy_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         // The SHAPE half below (WM_SETCURSOR over a non-client hit-test ->
         // DefWindowProc) is deliberately left alone: it cannot touch the count,
         // so it cannot desynchronise anything.
-        if (e->h == g_game_window && g_d3d_cursor) {
+        if (e->h == g_game_window && g_d3d_cursor && !gamestart_nw_delivered_for(g_title_leaf)) {
             switch (msg) {
                 case WM_NCMOUSEMOVE:
                     nc_cursor_show();
@@ -6044,6 +6052,12 @@ bool d3d_display_toggle(char* why, size_t cap)
     DWORD fgpid = 0; if (fg) GetWindowThreadProcessId(fg, &fgpid);
     if (fgpid != GetCurrentProcessId()) {
         if (why) _snprintf_s(why, cap, _TRUNCATE, "the game is not in front");
+        return false;
+    }
+    if (gamestart_nw_delivered_for(leaf)) {
+        if (why) _snprintf_s(why, cap, _TRUNCATE,
+                             "%s places its own window (-windowmode); borderless is not "
+                             "available for it yet", leaf);
         return false;
     }
     if (!g_ini_path[0]) {
