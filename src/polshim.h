@@ -1230,6 +1230,21 @@ HWND  d3d8_game_window();
 LONG  d3d8_in_modal();        // the user is dragging/sizing our own frame
 void  d3d8_set_window_icon(HWND h);   // the title's / PlayOnline's own icon
 LONG  d3d8_user_minimized();  // the user minimised the game (not the game itself)
+int   d3d8_freecursor_on();    // [dx] d3d_freecursor: the shim owns the cursor policy
+
+// cursorlock.cpp -- hold the pointer inside the game window's client area while
+// the game is the window in front and the pointer is over it; let go the moment
+// it is not (Alt+Tab, the Windows key, minimise, dragging the frame). Only a clip
+// it applied is ever released. [dx] cursor_lock, default 1, per title, live.
+void  cursorlock_configure(const wchar_t* ini);
+void  cursorlock_reload(const wchar_t* ini);
+void  cursorlock_stop(void);
+void  cursorlock_summary(void);
+bool  cursorlock_decide(bool locked_now, bool game_fg, bool minimized, bool in_modal,
+                        bool inside, bool button_held);
+bool  cursorlock_owns(void);
+void  cursorlock_reassert(void);
+int   cursorlock_selftest(void);
 
 // inputgate.cpp -- ONE answer to "should the mouse reach the title right now?",
 // applied at all THREE seams a POL title reads the mouse through (app.dll's

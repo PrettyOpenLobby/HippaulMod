@@ -554,6 +554,14 @@ static const ShimOption g_opts[] = {
   { L"dx",        L"dinput_mousescale", L"25", OPT_TEXT,
     L"Mouse speed in games (%)", NULL, false,
     L"Raise it if the pointer feels slow.", true },
+  // THE POINTER LOCK (cursorlock.cpp). A camera drag in FMO or FE that runs past the
+  // window edge carries the pointer onto the desktop, and the next click lands on
+  // another program. Held inside the client area only while the game is the window
+  // in front and the pointer is already over it; Alt+Tab, the Windows key, minimise
+  // or dragging the frame let it go. Per title, re-read live.
+  { L"dx",        L"cursor_lock",    L"1",    OPT_BOOL,
+    L"Keep the mouse inside the game window", NULL, false,
+    L"Alt+Tab or the Windows key lets it go.", true },
   // The FMV window. Both have run ON with no row since they were written, which
   // is how "the movie plays in a corner and the logo is drawn twice" stayed a
   // report with nothing in the ini to point at. The class list is HIDDEN -- it

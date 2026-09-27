@@ -1235,6 +1235,9 @@ static bool caller_native_windowed(void* retaddr)
 
 int d3d8_enabled() { return g_d3d_enable; }
 HWND d3d8_game_window() { return g_game_window; }
+// cursorlock.cpp holds the pointer only while the shim owns the cursor policy;
+// with d3d_freecursor=0 the title's own ClipCursor passes and two owners would fight.
+int  d3d8_freecursor_on() { return g_d3d_freecursor; }
 
 // The two pieces of window state inputgate.cpp needs. Both are written ONLY by
 // spy_proc (WM_ENTERSIZEMOVE / WM_SIZE), which is why they live here and are
@@ -4485,7 +4488,11 @@ static BOOL WINAPI hook_ClipCursor(const RECT* rc)
     // this -- its capture is SetCursorPos -- but a sibling title might, and the
     // promise of this mode is "the pointer is never trapped".)
     if (g_d3d_freecursor) {
-        if (real_ClipCursor) real_ClipCursor(NULL);
+        // The shim's own lock (cursorlock.cpp) is the one clip allowed to stand:
+        // a title's ClipCursor(NULL) must not drop it for a tick, or the pointer
+        // escapes mid camera-drag. Put it back instead of releasing it.
+        if (cursorlock_owns()) cursorlock_reassert();
+        else if (real_ClipCursor) real_ClipCursor(NULL);
         InterlockedExchange(&g_clip_applied, 0);
         if (g_d3d_trace && g_n_clip < 6)
             logf("[cur] ClipCursor SUPPRESSED (freecursor)");

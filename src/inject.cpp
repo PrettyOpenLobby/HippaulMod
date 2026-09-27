@@ -2018,6 +2018,7 @@ static void startup()
     ffxiplug_configure(ini);    // reads [ffxi]; Ashita/Windower coexistence + the plugin list
     ffxicfg_configure(ini);     // reads [ffxi] cfgdump; the FFXI settings-table dump (READ-ONLY)
     inputgate_configure(ini);   // reads [dx] mouse_focus_gate; withholds the mouse while another app is in front
+    cursorlock_configure(ini);  // reads [dx] cursor_lock; holds the pointer in the game window while it is in front
     keystate_init(ini);         // resolves GetAsyncKeyState/GetKeyState/GetKeyboardState for the [dx] key_focus_gate swap below
     exitprompt_configure(ini);  // reads [dx] close_prompt; what the title bar X does
     ffxiplug_start();           // no-op unless load_at=startup
@@ -2151,6 +2152,7 @@ void shim_reload(const wchar_t* ini)
     dinput_reload(ini);
     hookspy_reload(ini);
     inputgate_reload(ini);
+    cursorlock_reload(ini);
     exitprompt_reload(ini);
     maskguard_reload(ini);
     fmvskip_reload(ini);
@@ -2220,6 +2222,7 @@ void shim_reload_for_title(const wchar_t* ini, const char* leaf)
     dinput_reload(ini);
     vidfit_reload(ini);
     fmvskip_reload(ini);
+    cursorlock_reload(ini);
     title_scope_set(NULL);
 }
 
@@ -2264,6 +2267,10 @@ BOOL APIENTRY DllMain(HMODULE hmod, DWORD reason, LPVOID lpReserved)
             // flag test, one tick compare, one DeleteFileW -- so it is safe on
             // this path. See autoupdate_boot_confirm in autoupdate.cpp.
             autoupdate_boot_confirm();
+            // Let go of the pointer. One flag exchange and one ClipCursor(NULL): no
+            // alloc, no lock, so it is safe here -- and a pointer left confined to a
+            // window that no longer exists is worse than anything this path guards.
+            cursorlock_stop();
         } else {
             // FreeLibrary path (rare: this DLL is statically imported and
             // DllCanUnloadNow returns S_FALSE, so it never actually unmaps). We run
@@ -2279,6 +2286,7 @@ BOOL APIENTRY DllMain(HMODULE hmod, DWORD reason, LPVOID lpReserved)
             titletag_stop();
             autoupdate_stop();
             maskguard_stop();
+            cursorlock_stop();      // signal-only, and lets go of any clip it holds
             fmokey_stop();          // signal-only daemon; safe under the loader lock
             fmoime_stop();          // ditto -- polls for FrontMissionOnline.dll
         }
@@ -2306,6 +2314,7 @@ BOOL APIENTRY DllMain(HMODULE hmod, DWORD reason, LPVOID lpReserved)
             STEP("uitrace");   uitrace_summary();
             STEP("ffxicfg");   ffxicfg_summary();
             STEP("inputgate"); inputgate_summary();
+            STEP("cursorlock"); cursorlock_summary();
             STEP("keystate");  keystate_summary();
             STEP("exitprompt"); exitprompt_summary();
             STEP("regserve");  regserve_summary();
