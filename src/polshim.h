@@ -1237,6 +1237,9 @@ int   d3d8_freecursor_on();    // [dx] d3d_freecursor: the shim owns the cursor 
 // it is not (Alt+Tab, the Windows key, minimise, dragging the frame). Only a clip
 // it applied is ever released. [dx] cursor_lock, default 1, per title, live.
 void  cursorlock_configure(const wchar_t* ini);
+// secondlaunch.cpp -- a second PlayOnline launch brings the running game or Viewer
+// to the front before it exits. [multi] focus_existing, default 1.
+void  multi_focus_existing_start(const wchar_t* ini);
 void  cursorlock_reload(const wchar_t* ini);
 void  cursorlock_stop(void);
 void  cursorlock_summary(void);
