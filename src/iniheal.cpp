@@ -1486,6 +1486,8 @@ int shim_reset_fixes(const wchar_t* ini, char* report, size_t cap)
                           const wchar_t* def; const wchar_t* why; } k_launch[] = {
         { L"dx",      L"d3d_fs_rescue",   L"1",
           L"Front Mission Online: rescue a failed fullscreen device to windowed" },
+        { L"polshim", L"profile_cmdline", L"1",
+          L"Fantasy Earth: deliver SE's own -windowmode so it does not fight the shim" },
     };
     for (int i = 0; i < (int)_countof(k_launch); i++) {
         wchar_t cur[64];

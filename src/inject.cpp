@@ -27,7 +27,7 @@
 #include <objbase.h>       // CLSIDFromString, for the [replace] map
 #include <wincrypt.h>      // CryptoAPI MD5, for the [patch] noupdate POLP checksum
 
-int   g_verbose   = 1;
+int   g_verbose   = 0;   // per-call COM logging; a diagnostic, off unless asked for
 int   g_max_slots = 128;
 
 static HMODULE g_self = NULL;
@@ -1718,7 +1718,7 @@ static void startup()
     if (minimal)
         logf("[polshim] MINIMAL MODE -- routing/login/logging only; all game hooks "
              "(d3d, input, FMV, mask, byte-patches) are OFF. Diagnostic use.");
-    g_verbose   = GetPrivateProfileIntW(L"polshim", L"verbose",   1,   ini);
+    g_verbose   = GetPrivateProfileIntW(L"polshim", L"verbose",   0,   ini);
     g_max_slots = GetPrivateProfileIntW(L"polshim", L"max_slots", 128, ini);
     if (g_max_slots > POLSHIM_MAX_SLOTS) g_max_slots = POLSHIM_MAX_SLOTS;
     // Read at CONFIG time, not at DETACH time: GetPrivateProfileInt opens a file and
@@ -2081,6 +2081,10 @@ static void startup()
     // lock releases before it runs; thread lib-calls are disabled).
     maskguard_start();
 
+    // Must run before pol.exe reaches its single-instance mutex check: on the
+    // already-running branch the Viewer exits within a fraction of a second.
+    multi_focus_existing_start(ini);
+
     // Self-update, last and on a delay: the Viewer's patch channel structurally
     // cannot replace this DLL on Windows (pol.exe imports it statically, so it is
     // mapped and polcore's overwrite fails), and renaming a mapped file is the one
@@ -2119,7 +2123,7 @@ void shim_reload(const wchar_t* ini)
     // ever contained a [reload] line.
     logf("[reload] ---- SAVE: re-reading %ls ----", ini ? ini : L"(null)");
     polshim_trace_configure(ini);
-    g_verbose   = GetPrivateProfileIntW(L"polshim", L"verbose",   1,   ini);
+    g_verbose   = GetPrivateProfileIntW(L"polshim", L"verbose",   0,   ini);
     g_max_slots = GetPrivateProfileIntW(L"polshim", L"max_slots", 128, ini);
     if (g_max_slots > POLSHIM_MAX_SLOTS) g_max_slots = POLSHIM_MAX_SLOTS;
     g_exit_summaries = GetPrivateProfileIntW(L"polshim", L"exit_summaries", 0, ini);
