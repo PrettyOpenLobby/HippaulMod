@@ -1130,6 +1130,7 @@ int   d3d_exclusive_fullscreen();
 // d3d8 CreateDevice hook is: prepare BEFORE the real call (the window must be
 // its final size before a windowed device is built against it), finish AFTER a
 // successful one. See the block comment in d3d8hook.cpp.
+void* d3d_title_ra(void* ra, void** ra_slot);            // see through a d3d overlay
 int   d3d_caller_excepted(void* retaddr);                 // [dx] d3d_windowed_except
 const char* d3d_caller_except_source(void* retaddr);      // NULL, or WHY it is excepted
 void  d3d_prepare_game_window(void* retaddr, HWND game, UINT bw, UINT bh, int fit);

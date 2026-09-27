@@ -2564,6 +2564,36 @@ static bool                     g_dev_vt_ok   = false;   // the vtable validated
 // Defined below hook_Present, which it installs; called from hook_CreateDevice.
 static void wake_arm_d3d8(void* dev, HWND wnd);
 
+// --- per-device facts for the bug report (d3d8_diag_text) ------------------
+// Every d3d8 device in the process shares ONE vtable, so g_n_present counts the
+// Viewer's, the Friend List's and the title's frames together, and the last
+// CreateDevice is often the Friend List's. Report bf57 (2026-09-25) printed the
+// Friend List's device as if it were Fantasy Earth's. This table keeps each
+// device apart so the report can say which one is the game's.
+struct DiagDev { void* volatile dev; HWND wnd; UINT w, h; int windowed; volatile LONG presents; };
+static DiagDev g_diagdev[6];
+
+static void diagdev_note_create(void* dev, HWND wnd, const D3D8_PRESENT_PARAMETERS* pp)
+{
+    if (!dev) return;
+    int slot = -1;
+    for (int i = 0; i < 6; i++) if (g_diagdev[i].dev == dev) { slot = i; break; }
+    if (slot < 0) for (int i = 0; i < 6; i++) if (!g_diagdev[i].dev) { slot = i; break; }
+    if (slot < 0) slot = 5;                      // full: the newest takes the last row
+    DiagDev* d = &g_diagdev[slot];
+    d->wnd = wnd;
+    d->w = pp ? pp->BackBufferWidth : 0; d->h = pp ? pp->BackBufferHeight : 0;
+    d->windowed = pp ? pp->Windowed : -1;
+    InterlockedExchange(&d->presents, 0);
+    InterlockedExchangePointer((void* volatile*)&d->dev, dev);
+}
+
+static void diagdev_note_present(void* dev)
+{
+    for (int i = 0; i < 6; i++)
+        if (g_diagdev[i].dev == dev) { InterlockedIncrement(&g_diagdev[i].presents); return; }
+}
+
 // --- "what is the screen?" ---------------------------------------------------
 //
 // MEASURED: the game window receives CORRECT client coordinates -- a mouse at
@@ -2638,6 +2668,139 @@ static HRESULT STDMETHODCALLTYPE hook_GetDisplayMode(void* self, D3D8_DISPLAYMOD
 // module CreateDevice's return address landed in -- the same fact
 // d3d_windowed_except and the game-window icon already rely on.
 static LONG g_n_metrics_shell = 0;
+
+// ---------------------------------------------------------------- who REALLY called
+//
+// Every title verdict in this file is keyed off CreateDevice's return address. A
+// third-party overlay that hooks Direct3D sits between the title and us, so that
+// address lands in the OVERLAY. Measured 2026-09-25 (public report ...-bf57, POL
+// installed through Steam): `[title] TITLE #5: gameoverlayrenderer.dll -- no compat
+// profile`, and Fantasy Earth ran the whole session without its profile.
+//
+// The fix is NOT "whichever profiled title is loaded": the Friend List creates its
+// own device through the same overlay while FE is loaded, and naming THAT device FE
+// would declare a title boundary on the Friend List's window (the build-161 crash
+// shape). So walk the stack past the overlay, Direct3D itself and this DLL, and take
+// the FIRST other frame, whatever it is. If no frame can be found, return the
+// address unchanged: exactly the behaviour before this existed.
+//
+// Add-on cores (Ashita, Windower) are deliberately NOT in this list; they have their
+// own handling in caller_except_why.
+static const char* const k_overlay_modules[] = {
+    "gameoverlayrenderer.dll",  // Steam overlay -- measured
+    "DiscordHook.dll",          // Discord overlay -- same mechanism, not yet seen in a log
+    "RTSSHooks.dll",            // RivaTuner / Afterburner OSD -- same, not yet seen
+};
+
+static const char* module_leaf_of(void* addr, char* buf, size_t cap, HMODULE* out)
+{
+    if (out) *out = NULL;
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!addr || !VirtualQuery(addr, &mbi, sizeof(mbi)) || !mbi.AllocationBase ||
+        mbi.State != MEM_COMMIT)
+        return NULL;
+    if (!GetModuleFileNameA((HMODULE)mbi.AllocationBase, buf, (DWORD)cap)) return NULL;
+    if (out) *out = (HMODULE)mbi.AllocationBase;
+    const char* s = strrchr(buf, '\\');
+    return s ? s + 1 : buf;
+}
+
+static bool leaf_is_overlay(const char* leaf)
+{
+    if (!leaf) return false;
+    for (size_t i = 0; i < sizeof(k_overlay_modules) / sizeof(k_overlay_modules[0]); i++)
+        if (_stricmp(leaf, k_overlay_modules[i]) == 0) return true;
+    return false;
+}
+
+// A frame to look THROUGH: an overlay, Direct3D's own DLLs, or this shim.
+static bool frame_is_plumbing(void* addr)
+{
+    char path[MAX_PATH] = "";
+    HMODULE m = NULL;
+    const char* leaf = module_leaf_of(addr, path, sizeof(path), &m);
+    if (!leaf) return true;                      // not in a module: not a caller
+    HMODULE self = NULL;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)&frame_is_plumbing, &self);
+    if (m == self) return true;
+    if (leaf_is_overlay(leaf)) return true;
+    return _stricmp(leaf, "d3d8.dll") == 0 || _stricmp(leaf, "d3d9.dll") == 0;
+}
+
+// Is `r` a plausible return address: executable, and preceded by a CALL?
+// Covers E8 rel32, FF /2 with modrm forms reg / [reg] / [reg+d8] / [reg+d32] / [d32]
+// -- a COM vtable call is FF 5x d8 or FF 9x d32.
+static bool looks_like_return_address(BYTE* r)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(r - 6, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+    if (!(mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                         PAGE_EXECUTE_WRITECOPY)))
+        return false;
+    __try {
+        if (r[-5] == 0xE8) return true;
+        if (r[-2] == 0xFF && (r[-1] & 0xF8) == 0xD0) return true;          // call reg
+        if (r[-2] == 0xFF && (r[-1] & 0xF8) == 0x10 &&
+            (r[-1] & 7) != 4 && (r[-1] & 7) != 5) return true;             // call [reg]
+        if (r[-3] == 0xFF && (r[-2] & 0xF8) == 0x50 && (r[-2] & 7) != 4) return true;
+        if (r[-6] == 0xFF && ((r[-5] & 0xF8) == 0x90 && (r[-5] & 7) != 4)) return true;
+        if (r[-6] == 0xFF && r[-5] == 0x15) return true;                   // call [d32]
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return false;
+}
+
+static void* first_real_caller(void** ra_slot)
+{
+    // 1. The frame-pointer chain -- exact when every frame on the way keeps EBP.
+    void* frames[24];
+    USHORT n = RtlCaptureStackBackTrace(0, 24, frames, NULL);
+    for (USHORT i = 0; i < n; i++)
+        if (!frame_is_plumbing(frames[i])) return frames[i];
+
+    // 2. The chain broke inside the overlay (FPO code). Scan the raw stack upward,
+    //    starting just ABOVE the hook's own return-address slot (so none of our own
+    //    uninitialised locals are read), for the first CALL-preceded return address
+    //    outside the plumbing.
+    if (!ra_slot) return NULL;
+    NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
+    DWORD_PTR* p = (DWORD_PTR*)ra_slot + 1;
+    DWORD_PTR* end = (DWORD_PTR*)tib->StackBase;
+    for (int k = 0; p < end && k < 1024; p++, k++) {
+        void* v = (void*)*p;
+        if (!v || !looks_like_return_address((BYTE*)v)) continue;
+        if (!frame_is_plumbing(v)) return v;
+    }
+    return NULL;
+}
+
+// ra = the hook's _ReturnAddress(), ra_slot = its _AddressOfReturnAddress().
+void* d3d_title_ra(void* ra, void** ra_slot)
+{
+    char path[MAX_PATH] = "";
+    const char* leaf = module_leaf_of(ra, path, sizeof(path), NULL);
+    if (!leaf_is_overlay(leaf)) return ra;       // the ordinary case: no overlay
+
+    void* real = NULL;
+    __try { real = first_real_caller(ra_slot); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { real = NULL; }
+
+    static volatile LONG n_said = 0;
+    bool say = InterlockedIncrement(&n_said) <= 12;
+    char rpath[MAX_PATH] = "";
+    const char* rleaf = real ? module_leaf_of(real, rpath, sizeof(rpath), NULL) : NULL;
+    if (!rleaf) {
+        if (say)
+            logf("[d3d] device call came through %s and the real caller could not be "
+                 "found on the stack -- using %s as the caller, as before", leaf, leaf);
+        return ra;
+    }
+    if (say)
+        logf("[d3d] device call came through %s -- the real caller is %s%s", leaf, rleaf,
+             profile_for_module(rleaf) ? "" : " (not a title)");
+    return real;
+}
 
 static bool caller_is_title(void* retaddr)
 {
@@ -3106,6 +3269,9 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
                                                    D3D8_PRESENT_PARAMETERS* pp, void** ppDev)
 {
     InterlockedIncrement(&g_n_create);
+    // The title that called -- seen through a d3d overlay if one is in the way
+    // (d3d_title_ra). Every identity question below asks THIS, not _ReturnAddress().
+    void* caller_ra = d3d_title_ra(_ReturnAddress(), (void**)_AddressOfReturnAddress());
     if (pp && !pp->Windowed) InterlockedIncrement(&g_n_fullscreen_seen);
     if (focus) g_focus_window = focus;      // Reset() needs it later
 
@@ -3114,7 +3280,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
     if (!g_title_module)
         GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           (LPCSTR)_ReturnAddress(), &g_title_module);
+                           (LPCSTR)caller_ra, &g_title_module);
 
     // Arm the Fantasy Earth teardown guard. CreateDevice's return address lands in
     // the calling title, and FE's teardown crash only occurs once its device is
@@ -3125,7 +3291,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
         HMODULE fem = NULL;
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               (LPCSTR)_ReturnAddress(), &fem) && fem) {
+                               (LPCSTR)caller_ra, &fem) && fem) {
             char fpath[MAX_PATH] = "";
             GetModuleFileNameA(fem, fpath, MAX_PATH);
             const char* leaf = strrchr(fpath, '\\');
@@ -3176,11 +3342,11 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
         // back by hand with d3d_windowed_except, or FFXI under an add-on core. The
         // path is rarer, not gone -- and rarer is exactly when it stops being
         // tested, so it stays here.)
-        d3d_title_boundary(_ReturnAddress(), focus);
+        d3d_title_boundary(caller_ra, focus);
         HMODULE m = NULL;
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               (LPCSTR)_ReturnAddress(), &m) && m) {
+                               (LPCSTR)caller_ra, &m) && m) {
             if (m != g_title_module) {
                 char nm[MAX_PATH] = "";
                 GetModuleFileNameA(m, nm, MAX_PATH);
@@ -3196,10 +3362,10 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
     // and "the override fired and did not help" are different findings, and with
     // one shared vtable there is nothing else in the log to tell them apart.
     ExceptWhy exc_why = EXC_NONE;
-    bool excepted = caller_except_why(_ReturnAddress(), &exc_why);
+    bool excepted = caller_except_why(caller_ra, &exc_why);
     // Record whether THIS title windows itself, so fit_window (here and on a later Reset)
     // sizes it to its backbuffer instead of a remembered size. Set per device creation.
-    g_title_native_windowed = caller_native_windowed(_ReturnAddress());
+    g_title_native_windowed = caller_native_windowed(caller_ra);
     if (excepted && g_d3d_windowed && pp && !pp->Windowed)
         logf("[d3d]   caller is EXCEPTED from the windowed override by %s -- "
              "leaving it FULLSCREEN", except_source(exc_why));
@@ -3339,7 +3505,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
         // Not the title boundary (under a core the return address is the CORE's, so it
         // would name Ashita.dll as the title), not msgspy (the core owns input), and
         // nothing that resizes or re-presents. Those stay handed over.
-        if (SUCCEEDED(hr) && excepted && caller_excepted_by_core(_ReturnAddress())) {
+        if (SUCCEEDED(hr) && excepted && caller_excepted_by_core(caller_ra)) {
             HWND w = (pp && pp->hDeviceWindow) ? pp->hDeviceWindow : focus;
             if (w && IsWindow(w)) {
                 set_game_icon(w);
@@ -3351,7 +3517,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
             }
         }
 
-        if (SUCCEEDED(hr) && excepted && caller_native_windowed(_ReturnAddress())) {
+        if (SUCCEEDED(hr) && excepted && caller_native_windowed(caller_ra)) {
             HWND w = (pp && pp->hDeviceWindow) ? pp->hDeviceWindow : focus;
             if (w && IsWindow(w)) {
                 // A NATIVE-WINDOWED TITLE NEEDS A TITLE BOUNDARY TOO, and this is the
@@ -3361,7 +3527,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
                 // it never reaches d3d_prepare_game_window either. So without this call
                 // FE inherits the previous title's latched state, including which title
                 // the profile lookups resolve against.
-                d3d_title_boundary(_ReturnAddress(), w);
+                d3d_title_boundary(caller_ra, w);
                 g_game_window = w;
                 if (!g_game_born_tick) g_game_born_tick = GetTickCount();
                 install_msgspy(w, "GAME");
@@ -3437,6 +3603,11 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
         // changes when a title recreates its device, and the recovery must
         // follow the live one.
         if (g_dev_vt_ok) wake_arm_d3d8(*ppDev, g_game_window);
+        {
+            const D3D8_PRESENT_PARAMETERS* fp = pp_used_ok ? &pp_used : pp;
+            HWND dw = (fp && fp->hDeviceWindow) ? fp->hDeviceWindow : focus;
+            diagdev_note_create(*ppDev, dw, fp);
+        }
     }
     // For the bug report (d3d8_diag_text): the call as the REAL CreateDevice saw
     // it, after every override above, so a report shows the device the title
@@ -3458,7 +3629,9 @@ static HRESULT STDMETHODCALLTYPE hook_Reset(void* self, D3D8_PRESENT_PARAMETERS*
 
     // Same opt-out as CreateDevice. A title excluded there must be excluded here
     // too, or its first Reset would silently drag it back into windowed mode.
-    if (g_d3d_windowed && !caller_excepted(_ReturnAddress()) && pp && !pp->Windowed) {
+    if (g_d3d_windowed &&
+        !caller_excepted(d3d_title_ra(_ReturnAddress(), (void**)_AddressOfReturnAddress())) &&
+        pp && !pp->Windowed) {
         D3D8_PRESENT_PARAMETERS mod = *pp;
         // Reset has no hFocusWindow argument, so the only window we can name is
         // whatever the caller put in hDeviceWindow -- plus the one we recorded at
@@ -3842,6 +4015,7 @@ static HRESULT STDMETHODCALLTYPE hook_Present(void* self, const void* a, const v
     tm_resv_diag_start();
     HRESULT hr = orig_Present(self, a, b, c, d);
     LONG n = InterlockedIncrement(&g_n_present);
+    diagdev_note_present(self);
     g_last_present_hr = hr;
     // The heartbeat is renderspy's instrument. Since the sleep/resume recovery
     // also needs this slot, Present is now hooked in sessions where renderspy is
@@ -6159,6 +6333,18 @@ int d3d8_diag_text(char* out, size_t cch, DWORD sample_ms)
     DAPP("game_window: %p  device: %p (%s)\n", (void*)g_game_window, g_game_device,
          g_game_device ? "live" : "released");
 
+    // Which device draws into the GAME window -- the one the verdict is about.
+    int gi = -1;
+    for (int i = 0; i < 6; i++) {
+        const DiagDev* d = &g_diagdev[i];
+        if (!d->dev) continue;
+        bool game = g_game_window && d->wnd == g_game_window;
+        if (game) gi = i;
+        DAPP("device %p: window=%p %ux%u windowed=%d presents=%ld%s\n", d->dev,
+             (void*)d->wnd, d->w, d->h, d->windowed, d->presents,
+             game ? "  <-- the GAME window" : "");
+    }
+    LONG g0 = gi >= 0 ? g_diagdev[gi].presents : 0;
     LONG p0 = g_n_present, b0 = g_n_begin, d0 = g_rs_draw_total;
     DAPP("present: %s, total=%ld last_hr=0x%08lX\n",
          orig_Present ? "hooked" : "NOT hooked (no counts)", p0,
@@ -6179,12 +6365,21 @@ int d3d8_diag_text(char* out, size_t cch, DWORD sample_ms)
         if (g_rs_hooked)
             DAPP("draw_rate: %.1f/s (%.1f per frame)\n", (d1 - d0) / s,
                  (p1 > p0) ? (double)(d1 - d0) / (p1 - p0) : 0.0);
-        if (orig_Present && p1 == p0)
-            DAPP("verdict: NO frames presented during the sample -- the title's "
-                 "frame loop is stopped or blocked\n");
+        if (gi >= 0) {
+            LONG g1 = g_diagdev[gi].presents;
+            DAPP("game_device_rate: present=%.1f/s\n", (g1 - g0) / s);
+            if (orig_Present && g1 == g0)
+                DAPP("verdict: the GAME's device presented NO frames during the sample -- "
+                     "the title's frame loop is stopped or blocked\n");
+            else if (orig_Present)
+                DAPP("verdict: the GAME's device IS presenting frames -- if the screen "
+                     "is black, the frames are not reaching it\n");
+        } else if (orig_Present && p1 == p0)
+            DAPP("verdict: NO frames presented by ANY device during the sample (no device "
+                 "is on the game window, so this cannot say which is the title's)\n");
         else if (orig_Present)
-            DAPP("verdict: the title IS presenting frames -- if the screen is "
-                 "black, the frames are not reaching it\n");
+            DAPP("verdict: some device is presenting, but none is on the game window -- "
+                 "this cannot say whether the title is\n");
     }
 #undef DAPP
     return (int)n;

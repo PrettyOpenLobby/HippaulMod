@@ -568,6 +568,8 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(IDirect3D9* self, UINT adapte
     InterlockedIncrement(&g_n_create);
     if (pp && !pp->Windowed) InterlockedIncrement(&g_n_fullscreen);
     if (focus) g_focus_window = focus;
+    // The title that called, seen through a d3d overlay if one is in the way (d3d8hook.cpp).
+    void* caller_ra = d3d_title_ra(_ReturnAddress(), (void**)_AddressOfReturnAddress());
 
     if (g_trace) {
         logf("[d3d9] CreateDevice(adapter=%u devtype=%d focus=%p behavior=%08lX)",
@@ -580,7 +582,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(IDirect3D9* self, UINT adapte
     // Per-title opt-out, honoured exactly as on the d3d8 side. Logged rather
     // than silent: "the override did not fire" and "the override fired and did
     // not help" are different findings.
-    const char* exc_src = d3d_caller_except_source(_ReturnAddress());
+    const char* exc_src = d3d_caller_except_source(caller_ra);
     bool excepted = exc_src != NULL;
     if (excepted && g_windowed && pp && !pp->Windowed)
         logf("[d3d9]   caller is EXCEPTED from the windowed override by %s -- "
@@ -595,7 +597,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(IDirect3D9* self, UINT adapte
         // window -- all BEFORE the device is built against it. This is the same
         // call the d3d8 path makes, so fakemode, the icon and the absolute mouse
         // mapping now apply to FMO too.
-        d3d_prepare_game_window(_ReturnAddress(), g_game_window,
+        d3d_prepare_game_window(caller_ra, g_game_window,
                                 mod.BackBufferWidth, mod.BackBufferHeight,
                                 g_fitwin);
         hr = orig_CreateDevice(self, adapter, devtype, focus, behavior, &mod, ppDev);
@@ -652,7 +654,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(IDirect3D9* self, UINT adapte
                 D3DPRESENT_PARAMETERS mod = *pp;
                 make_windowed(self, adapter, &mod, focus);
                 g_game_window = mod.hDeviceWindow ? mod.hDeviceWindow : focus;
-                d3d_prepare_game_window(_ReturnAddress(), g_game_window,
+                d3d_prepare_game_window(caller_ra, g_game_window,
                                         mod.BackBufferWidth, mod.BackBufferHeight,
                                         g_fitwin);
                 hr = orig_CreateDevice(self, adapter, devtype, focus, behavior,
@@ -759,7 +761,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(IDirect3D9* self, UINT adapte
                      "will appear for this d3d9 title");
         }
         // Name the title's device even when no override ran -- see caller_is_title.
-        if (caller_is_title(_ReturnAddress()) && g_game_device != *ppDev) {
+        if (caller_is_title(caller_ra) && g_game_device != *ppDev) {
             g_game_device = *ppDev;
             logf("[d3d9] the GAME's device is %p (created by the title, not by "
                  "the VMR-9 movie renderer) -- frame counting and the "
@@ -810,7 +812,9 @@ static HRESULT STDMETHODCALLTYPE hook_Reset(IDirect3DDevice9* self,
 
     // Same opt-out as CreateDevice. A title excluded there must be excluded here
     // too, or its first Reset would silently drag it back into windowed mode.
-    if (g_windowed && !d3d_caller_excepted(_ReturnAddress()) && pp && !pp->Windowed) {
+    if (g_windowed &&
+        !d3d_caller_excepted(d3d_title_ra(_ReturnAddress(), (void**)_AddressOfReturnAddress())) &&
+        pp && !pp->Windowed) {
         D3DPRESENT_PARAMETERS mod = *pp;
         IDirect3D9* d3d = NULL;
         if (FAILED(self->GetDirect3D(&d3d))) d3d = NULL;
