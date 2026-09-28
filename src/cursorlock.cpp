@@ -57,8 +57,13 @@
 //
 // Stands down entirely when the shim is not the owner of the cursor policy
 // ([dx] d3d_freecursor=0 hands the titles their own ClipCursor back, and two
-// owners would fight every tick) and under Wine/Proton, where the Deck runs the
-// game full-screen with no desktop to click away to.
+// owners would fight every tick) and under gamescope (Steam Deck Game Mode and
+// the like), where the game IS the whole screen and there is no desktop to click
+// away to. NOT under Wine/Proton in general: a Linux DESKTOP player has exactly the
+// Windows problem, and the lock first shipped standing down for all of Wine, which
+// is how a Proton player on a desktop got nothing (reported 2026-09-28). Wine drops
+// its own pointer grab and moves the foreground off the game when a native Linux
+// window takes focus, so the release below still fires.
 //
 // CONFIG: [dx] cursor_lock = 1 (default), per title as [dx.<leaf>] cursor_lock.
 // [dx] cursor_hide = 0/1 hides the pointer over the picture while locked; absent,
@@ -71,7 +76,7 @@ static volatile LONG g_stop    = 0;
 static HANDLE        g_thread  = NULL;
 static volatile LONG g_owned   = 0;     // WE applied the clip that is in force
 static RECT          g_want    = { 0, 0, 0, 0 };
-static bool          g_wine    = false;
+static bool          g_wine    = false;   // gamescope: the game is the whole screen
 
 // THE HIDDEN POINTER (2026-09-28, FMO). While locked, the Windows pointer over the
 // game's picture is hidden for a title that draws its own or does not use it --
@@ -93,10 +98,17 @@ static BOOL real_clip(const RECT* r)
     return clip ? clip(r) : ClipCursor(r);
 }
 
-static bool under_wine(void)
+// Stand down only where there is nothing to escape to: a gamescope session. Its
+// Wayland socket is exported to every child, and the Deck's Game Mode also sets
+// XDG_CURRENT_DESKTOP=gamescope. SteamDeck=1 is NOT used: Desktop Mode sets it too,
+// and there a desktop does exist.
+static bool under_gamescope(void)
 {
-    HMODULE nt = GetModuleHandleA("ntdll.dll");
-    return nt && GetProcAddress(nt, "wine_get_version") != NULL;
+    if (GetEnvironmentVariableA("GAMESCOPE_WAYLAND_DISPLAY", NULL, 0) > 0) return true;
+    char de[64] = "";
+    if (GetEnvironmentVariableA("XDG_CURRENT_DESKTOP", de, sizeof(de)) > 0 &&
+        _stricmp(de, "gamescope") == 0) return true;
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,9 +257,10 @@ void cursorlock_configure(const wchar_t* ini)
 {
     g_enable = ini_int_title(L"dx", L"cursor_lock", 1, ini);
     g_hide   = ini_int_title(L"dx", L"cursor_hide", -1, ini);
-    g_wine = under_wine();
+    g_wine = under_gamescope();
     if (g_wine) {
-        logf("[lock] Wine/Proton -- the pointer lock stands down (no desktop to escape to)");
+        logf("[lock] gamescope session -- the pointer lock stands down (the game is the "
+             "whole screen; there is no desktop to click away to)");
         return;
     }
     if (!g_thread) {
@@ -280,7 +293,7 @@ void cursorlock_summary(void)
 {
     logf("[lock] summary: engaged=%ld released=%ld re-applied=%ld (%s)",
          g_n_engage, g_n_release, g_n_reassert,
-         g_wine ? "stood down under Wine" : g_enable ? "on" : "off");
+         g_wine ? "stood down under gamescope" : g_enable ? "on" : "off");
 }
 
 // ---------------------------------------------------------------------------
