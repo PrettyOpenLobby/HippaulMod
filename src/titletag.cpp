@@ -246,7 +246,7 @@ static HWND main_window()
 // The tag we WANT right now. Recomputed per pass rather than cached, because
 // autoupdate can stage a new DLL mid-session and the caption is how the user is
 // told to restart -- a tag fixed at startup could never say so.
-static void desired_tag(wchar_t* out, size_t cch)
+static void desired_tag(wchar_t* out, size_t cch, int with_server)
 {
     resolve_server();
 
@@ -254,7 +254,7 @@ static void desired_tag(wchar_t* out, size_t cch)
     // yet. Deliberately ABSENT rather than guessed: "no answer yet" and "the
     // dev box" must not look the same on screen.
     wchar_t srv[144] = L"";
-    if (g_show_server && g_server[0])
+    if (with_server && g_show_server && g_server[0])
         _snwprintf_s(srv, _countof(srv), _TRUNCATE, L" | %s", g_server);
     // While the live log is on it is sending the player's log, so it says so
     // where they look, with the time it has left.
@@ -287,6 +287,39 @@ static void desired_tag(wchar_t* out, size_t cch)
 #endif
 }
 
+// THE WHOLE CAPTION MUST STAY UNDER 64 CHARACTERS, or the Viewer corrupts itself.
+//
+// app.dll reads its own caption back with a wide GetWindowText into a global at
+// 0x4D07490 (app.dll 0x4ACB6A1: `push 0x80; push 0x4D07490; push hwnd`). 0x80 is
+// passed as a CHARACTER count, but the buffer is 0x80 BYTES: 64 characters, and
+// the next global, at 0x4D07510, is the table its Unicode loader uses to find
+// kernel32 for every wide API it resolves on first use. The stock caption
+// ("PlayOnline Viewer Ver.1.18.15e", 30 characters) never came close. Ours did:
+// "... [PoL-Shim v0.2.0 b182 | 82.221.100.125]" is 70 characters, and characters
+// 66-67 ("12") landed on kernel32's cached handle. Every wide API resolved after
+// that fell back to the loader's built-in "not implemented" stub -- MoveFileW
+// among them, which is how the Viewer marks a message read (msg\r\b -> msg\r\a).
+// Measured 2026-09-28 on a live client: MoveFileW pointer = the stub, handle slot
+// = 0x00320031, and Process Monitor showed the move never reaching the disk. So
+// read messages came back as new on every login, for every player running a
+// tagged build.
+//
+// 63 characters plus the terminator fill the 128 bytes exactly. `apply_once`
+// drops the server label, then shortens the tag, before it lets a caption past
+// this; if even the short tag does not fit, the caption is left untagged.
+#define TITLE_MAX_CHARS 63
+
+// The last resort: says RESTART when an update waits, else just the version.
+// Both keep the " [HippaulMod " marker `find_our_tag` strips by, or a later
+// pass could not replace them and tags would pile up.
+static void short_tag(wchar_t* out, size_t cch)
+{
+    if (autoupdate_pending_build() != 0)
+        _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod RESTART]");
+    else
+        _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod v%S]", POLSHIM_VERSION);
+}
+
 // Our tag in a caption. Builds before the HippaulMod rename tagged " [PoL-Shim ",
 // so both are ours to strip.
 static wchar_t* find_our_tag(wchar_t* cur)
@@ -313,9 +346,21 @@ static void apply_once()
         return;
     }
 
+    // The caption without any tag of ours: what the tag has to fit beside.
+    wchar_t base[512];
+    wcscpy_s(base, _countof(base), cur);
+    wchar_t* ours = find_our_tag(base);
+    if (ours) *ours = 0;
+    size_t room = wcslen(base) < TITLE_MAX_CHARS ? TITLE_MAX_CHARS - wcslen(base) : 0;
+
+    // Longest first, and only as long as it fits (see TITLE_MAX_CHARS).
     wchar_t wtag[224];          // version + pending-build notice + server label
-    desired_tag(wtag, _countof(wtag));
-    if (wcsstr(cur, wtag)) return;                 // already carries THIS tag
+    desired_tag(wtag, _countof(wtag), 1);
+    if (wcslen(wtag) > room) desired_tag(wtag, _countof(wtag), 0);
+    if (wcslen(wtag) > room) short_tag(wtag, _countof(wtag));
+    if (wcslen(wtag) > room) wtag[0] = 0;
+    if (wtag[0] ? wcsstr(cur, wtag) != NULL : ours == NULL)
+        return;                                    // already carries THIS tag
 
     // Strip any earlier tag of ours before appending, or a caption that was
     // tagged before an update would end up carrying both. The marker is the
