@@ -1028,7 +1028,7 @@ void   ui_dpi_fit_end(HANDLE prev);
 
 // polreport.cpp -- the report key: the player files a bug report in one step.
 void  polreport_configure(const wchar_t* ini);
-void  polreport_open();                   // gather, ask, send (the watcher thread calls it)
+void  polreport_open();                   // gather, ask, send, on a thread of its own
 int   polreport_armed();                  // [report] enable, after configure
 // The bundle builder. services/issuereport.py (parse_bundle) is the other half of
 // this format and the two must agree byte for byte. Caller free()s; `desc` is UTF-8.
@@ -1457,6 +1457,7 @@ bool  maskguard_refuse_activation(HWND h, const char* api);
 // exists. The log says so in those words, because a fix that looks inert gets undone.
 void  protondxvk_configure(const wchar_t* ini);
 void  protondxvk_heal(void);
+void  protondxvk_switch_now(void);        // this launch: load DXVK d3d8 before anyone else loads d3d8
 // The file decision, split out so protondxvktest.cpp can drive it against a scratch
 // tree instead of somebody's Steam install. install.sh's version of this same logic
 // shipped two bugs that only running it caught -- it dropped the user's other settings,

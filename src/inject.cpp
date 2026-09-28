@@ -1755,7 +1755,6 @@ static void startup()
     dinput_configure(ini);      // [dx] dinput_* -- the games' mouse
     hookspy_configure(ini);     // [dx] hook_* -- the input hook chain
     maskguard_configure(ini);   // [dx] mask_guard -- keep the Viewer's mask window alive
-    protondxvk_configure(ini);  // [proton] -- keep Proton's d3d8 on DXVK (heals for NEXT launch)
     }
     com_configure(ini);         // [polshim] comtrace -- ole32 activation trace
 
@@ -1995,6 +1994,10 @@ static void startup()
 
     // Must precede sweep_loaded(): patch_iat matches by resolved address, so the
     // DirectX entry points have to be resolved before the first IAT is walked.
+    // [proton] -- d3d8 on DXVK: switched for THIS launch and healed for the next.
+    // Here, not with the other configure calls: it must run before d3d8_resolve
+    // loads d3d8, and after log_open -- up there its every line went nowhere.
+    if (!minimal) protondxvk_configure(ini);
     dx_resolve();               // no-op unless [dx] enable=1
     d3d8_resolve();             // ditto, unless [dx] d3d_enable=1
     d3d9_resolve();             // ditto -- FMO's renderer, invisible to d3d8_resolve

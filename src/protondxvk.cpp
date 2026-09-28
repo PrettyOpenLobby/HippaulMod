@@ -244,6 +244,167 @@ int protondxvk_apply_to(const char* dir)
     return rc;
 }
 
+// ---------------------------------------------------------------------------
+// SWITCH -- put THIS launch on DXVK, before anything has loaded d3d8
+// ---------------------------------------------------------------------------
+//
+// The heal above only helps the NEXT launch, and only when there is a Steam Proton
+// folder to write to. That misses three players: the first launch after installing
+// the shim, a game started from Lutris / Heroic / Bottles, and a Proton folder the
+// shim cannot write. So at shim init -- before d3d8_resolve loads d3d8, and long
+// before a title does -- the shim loads DXVK's d3d8 itself, by full path. Every
+// later "d3d8.dll" in the process then binds to that module by name.
+//
+// Measured on the Deck under Proton 11, 2026-09-28:
+//   * Wine hands back its OWN builtin d3d8 for any path, DXVK's included, unless
+//     d3d8's load order says native. No override at all is not enough.
+//   * The per-app key (AppDefaults\pol.exe\DllOverrides) is read once, at process
+//     start, so writing it now only helps the next launch.
+//   * The GLOBAL HKCU\Software\Wine\DllOverrides values are re-read on every load,
+//     so a value written now takes effect for the very next LoadLibrary.
+// So d3d8=native is set for the one load and removed straight after. Nothing is
+// left in the prefix.
+//
+// DXVK's d3d8 is built on DXVK's d3d9 (it creates a d3d9 device underneath), so
+// the switch only happens when the d3d9 this process loads is DXVK -- and the d3d8
+// is taken from beside that d3d9 first, so the two come from the same DXVK. A d3d8
+// override the player or their launcher set to builtin is left alone.
+static bool g_switched = false;
+
+// The d3d8 load order the environment or the registry already asks for, or "" when
+// nothing mentions d3d8. WINEDLLOVERRIDES beats the registry in Wine, so it is
+// read first. Entries look like "d3d8=n" or "d3d8,d3d9=n,b", joined by ';'.
+static void d3d8_override(char* out, size_t cch)
+{
+    out[0] = 0;
+    char env[2048];
+    DWORD n = GetEnvironmentVariableA("WINEDLLOVERRIDES", env, sizeof(env));
+    if (n && n < sizeof(env)) {
+        _strlwr_s(env, sizeof(env));
+        char *c1 = NULL, *c2 = NULL;
+        for (char* ent = strtok_s(env, ";", &c1); ent; ent = strtok_s(NULL, ";", &c1)) {
+            char* eq = strchr(ent, '=');
+            if (!eq) continue;
+            *eq = 0;
+            for (char* name = strtok_s(ent, ",", &c2); name; name = strtok_s(NULL, ",", &c2)) {
+                while (*name == ' ') ++name;
+                if (strcmp(name, "d3d8") == 0 || strcmp(name, "*d3d8") == 0) {
+                    _snprintf(out, cch, "%s", eq + 1); out[cch - 1] = 0;
+                    return;
+                }
+            }
+        }
+    }
+
+    char exe[MAX_PATH] = "", key[MAX_PATH + 64];
+    GetModuleFileNameA(NULL, exe, sizeof(exe));
+    const char* leaf = strrchr(exe, '\\');
+    leaf = leaf ? leaf + 1 : exe;
+    _snprintf(key, sizeof(key), "Software\\Wine\\AppDefaults\\%s\\DllOverrides", leaf);
+    key[sizeof(key) - 1] = 0;
+    const char* subs[] = { key, "Software\\Wine\\DllOverrides" };
+    for (int i = 0; i < 2; i++) {
+        DWORD cb = (DWORD)cch;
+        if (RegGetValueA(HKEY_CURRENT_USER, subs[i], "d3d8", RRF_RT_REG_SZ, NULL,
+                         out, &cb) == ERROR_SUCCESS)
+            return;
+        out[0] = 0;
+    }
+}
+
+// Does the file on disk carry DXVK's strings? Read, not loaded: loading it to ask
+// would be the very load this is deciding about.
+static bool file_is_dxvk(const char* path)
+{
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD sz = GetFileSize(f, NULL), got = 0;
+    bool yes = false;
+    if (sz != INVALID_FILE_SIZE && sz > 0 && sz < 32u * 1024 * 1024) {
+        BYTE* buf = (BYTE*)malloc(sz);
+        if (buf && ReadFile(f, buf, sz, &got, NULL))
+            for (DWORD i = 0; i + 4 <= got; i++)
+                if (buf[i] == 'D' && memcmp(buf + i, "DXVK", 4) == 0) { yes = true; break; }
+        free(buf);
+    }
+    CloseHandle(f);
+    return yes;
+}
+
+void protondxvk_switch_now(void)
+{
+    if (!g_heal) return;
+    if (!under_wine()) return;
+    if (GetModuleHandleA("d3d8.dll")) return;    // too late; the report says which it is
+
+    char ov[64];
+    d3d8_override(ov, sizeof(ov));
+    char sys[MAX_PATH] = "", sysd3d8[MAX_PATH] = "";
+    GetSystemDirectoryA(sys, sizeof(sys));
+    _snprintf(sysd3d8, sizeof(sysd3d8), "%s\\d3d8.dll", sys); sysd3d8[sizeof(sysd3d8)-1] = 0;
+    const bool sys_is_dxvk = file_is_dxvk(sysd3d8);
+
+    // Proton with PROTON_DXVK_D3D8=1: d3d8=n and the prefix copy IS DXVK. Nothing to do.
+    if (ov[0] == 'n' && sys_is_dxvk) return;
+    // Builtin-first, or disabled: somebody chose that. Leave it.
+    if (ov[0] && ov[0] != 'n') {
+        logf("[proton] d3d8 is set to '%s' by the launcher or the player -- leaving "
+             "it alone", ov);
+        return;
+    }
+
+    HMODULE d9 = LoadLibraryA("d3d9.dll");
+    if (!d9 || !module_contains(d9, "DXVK")) {
+        logf("[proton] d3d8 is on wined3d, and d3d9 here is not DXVK either -- DXVK's "
+             "d3d8 needs DXVK's d3d9, so d3d8 stays on wined3d");
+        return;
+    }
+
+    // Beside the d3d9 first (same DXVK, by construction), then the active Proton.
+    char src[MAX_PATH] = "";
+    char d9dir[MAX_PATH] = "";
+    if (GetModuleFileNameA(d9, d9dir, sizeof(d9dir))) {
+        char* slash = strrchr(d9dir, '\\');
+        if (slash) {
+            *slash = 0;
+            _snprintf(src, sizeof(src), "%s\\d3d8.dll", d9dir); src[sizeof(src)-1] = 0;
+            if (!file_is_dxvk(src)) src[0] = 0;
+        }
+    }
+    char dir[MAX_PATH];
+    if (!src[0] && active_proton_dir(dir, sizeof(dir))) {
+        _snprintf(src, sizeof(src), "%s\\files\\lib\\wine\\dxvk\\i386-windows\\d3d8.dll", dir);
+        src[sizeof(src)-1] = 0;
+        if (!file_is_dxvk(src)) src[0] = 0;
+    }
+    if (!src[0]) {
+        logf("[proton] d3d8 is on wined3d and no DXVK d3d8 was found beside d3d9 or in "
+             "the active Proton (DXVK 2.4+ / Proton 9+ ship one) -- d3d8 stays on wined3d");
+        return;
+    }
+
+    HKEY k;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Wine\\DllOverrides", 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        logf("[proton] could not open the Wine DllOverrides key -- d3d8 stays on wined3d");
+        return;
+    }
+    const bool wrote = !ov[0] &&
+        RegSetValueExA(k, "d3d8", 0, REG_SZ, (const BYTE*)"native", 7) == ERROR_SUCCESS;
+    HMODULE m = LoadLibraryExA(src, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (wrote) RegDeleteValueA(k, "d3d8");       // only ever our own value
+    RegCloseKey(k);
+
+    if (m && module_contains(m, "DXVK")) {
+        g_switched = true;
+        logf("[proton] d3d8 switched to DXVK for this launch -- %s", src);
+    } else {
+        logf("[proton] loaded %s but Wine gave its own d3d8 -- d3d8 stays on wined3d "
+             "this launch", src);
+    }
+}
+
 void protondxvk_heal(void)
 {
     if (!g_heal) return;
@@ -252,7 +413,9 @@ void protondxvk_heal(void)
     char dir[MAX_PATH];
     if (!active_proton_dir(dir, sizeof(dir))) {
         logf("[proton] STEAM_COMPAT_TOOL_PATHS is absent or not a Unix path -- "
-             "cannot tell which Proton is active; leaving it alone");
+             "cannot tell which Proton is active; leaving it alone%s",
+             g_switched ? " (this launch was switched in-process, and every launch "
+                          "will be)" : "");
         return;
     }
 
@@ -267,9 +430,13 @@ void protondxvk_heal(void)
         // WARNING: SAY THAT IT IS NOT THIS LAUNCH. Proton chose the d3d8.dll before this DLL
         // existed, so a repair cannot help the run that made it -- and a fix that looks
         // like it did nothing is how a working fix gets undone.
-        logf("[proton] *** d3d8 -> DXVK ENABLED in %s -- TAKES EFFECT ON THE NEXT "
-             "LAUNCH, not this one (Proton picks the d3d8 before we exist). "
-             "Restart the game to get it.", us);
+        if (g_switched)
+            logf("[proton] *** d3d8 -> DXVK ENABLED in %s -- this launch was already "
+                 "switched in-process; from the next launch Proton does it itself.", us);
+        else
+            logf("[proton] *** d3d8 -> DXVK ENABLED in %s -- TAKES EFFECT ON THE NEXT "
+                 "LAUNCH, not this one (Proton picks the d3d8 before we exist). "
+                 "Restart the game to get it.", us);
         break;
     case PDX_NO_PROTON:
         logf("[proton] '%s' has no proton script -- not writing there", dir);
@@ -292,5 +459,6 @@ void protondxvk_configure(const wchar_t* ini)
 {
     g_report = GetPrivateProfileIntW(L"proton", L"report",    1, ini);
     g_heal   = GetPrivateProfileIntW(L"proton", L"dxvk_d3d8", 1, ini);
-    protondxvk_heal();
+    protondxvk_switch_now();    // this launch -- before anything has loaded d3d8
+    protondxvk_heal();          // the next ones, through Proton itself
 }
