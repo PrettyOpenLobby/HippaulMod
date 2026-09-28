@@ -4636,6 +4636,17 @@ static HCURSOR WINAPI hook_SetCursor(HCURSOR c)
             if (id) return real_SetCursor(LoadCursorA(NULL, id));
         }
     }
+    // The title setting its own shape over the picture while the lock hides it
+    // (cursorlock.cpp): keep it hidden. Over the frame it passes as before.
+    if (c && gw && cursorlock_hide_now()) {
+        POINT p, o = { 0, 0 };
+        RECT cr;
+        BOOL ok = real_GetCursorPos ? real_GetCursorPos(&p) : GetCursorPos(&p);
+        if (ok && GetClientRect(gw, &cr) && ClientToScreen(gw, &o)) {
+            OffsetRect(&cr, o.x, o.y);
+            if (PtInRect(&cr, p)) return real_SetCursor(NULL);
+        }
+    }
     return real_SetCursor(c);
 }
 
@@ -5072,6 +5083,14 @@ static LRESULT CALLBACK spy_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (e->h == g_game_window && msg == WM_SETCURSOR &&
             LOWORD(lp) != HTCLIENT)
             return DefWindowProcA(h, msg, wp, lp);
+        // Over the PICTURE while the pointer lock is on, a title that does not use the
+        // Windows pointer (FMO) gets none (cursorlock.cpp, [dx] cursor_hide). TRUE stops
+        // DefWindowProc putting the class cursor back.
+        if (e->h == g_game_window && msg == WM_SETCURSOR &&
+            LOWORD(lp) == HTCLIENT && cursorlock_hide_now()) {
+            real_SetCursor ? real_SetCursor(NULL) : SetCursor(NULL);
+            return TRUE;
+        }
 
         const char* nm = mouse_msg_name(msg);
         // Sample rather than flood: the first few of each, then occasionally.

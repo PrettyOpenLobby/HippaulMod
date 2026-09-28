@@ -1247,6 +1247,8 @@ bool  cursorlock_decide(bool locked_now, bool game_fg, bool minimized, bool in_m
                         bool inside, bool button_held);
 bool  cursorlock_owns(void);
 void  cursorlock_reassert(void);
+bool  cursorlock_hide_wanted(void);   // [dx] cursor_hide, default: FMO only
+bool  cursorlock_hide_now(void);      // locked AND hide wanted: the picture gets no pointer
 int   cursorlock_selftest(void);
 
 // inputgate.cpp -- ONE answer to "should the mouse reach the title right now?",

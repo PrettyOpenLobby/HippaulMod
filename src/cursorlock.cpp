@@ -24,7 +24,8 @@
 //
 // THE RULE
 //
-// The pointer is confined to the game window's CLIENT area only while ALL of:
+// The pointer is confined to the game WINDOW (frame included, so it can still be
+// moved and resized) only while ALL of:
 //
 //   * the game window itself is the foreground window. Not merely "a window of
 //     ours": the Friend List, the exit prompt and the settings dialog are all
@@ -60,7 +61,8 @@
 // game full-screen with no desktop to click away to.
 //
 // CONFIG: [dx] cursor_lock = 1 (default), per title as [dx.<leaf>] cursor_lock.
-// Re-read live.
+// [dx] cursor_hide = 0/1 hides the pointer over the picture while locked; absent,
+// it is on for FMO only. Both re-read live.
 
 #include "polshim.h"
 
@@ -70,6 +72,14 @@ static HANDLE        g_thread  = NULL;
 static volatile LONG g_owned   = 0;     // WE applied the clip that is in force
 static RECT          g_want    = { 0, 0, 0, 0 };
 static bool          g_wine    = false;
+
+// THE HIDDEN POINTER (2026-09-28, FMO). While locked, the Windows pointer over the
+// game's picture is hidden for a title that draws its own or does not use it --
+// FMO by default. NOT Fantasy Earth: its in-game pointer IS the Windows cursor, and
+// hiding it would leave that game with no pointer at all. Shown again over the
+// frame, and whenever the lock is off. [dx] cursor_hide, or [dx.<leaf>]
+// cursor_hide, overrides the per-title default; absent (-1) means "the default".
+static int  g_hide = -1;
 
 static LONG g_n_engage = 0, g_n_release = 0, g_n_reassert = 0;
 
@@ -141,14 +151,26 @@ static void tick(void)
     POINT o = { 0, 0 };
     bool have_rect = GetClientRect(gw, &cr) && cr.right > 0 && cr.bottom > 0 &&
                      ClientToScreen(gw, &o);
-    RECT want = { 0, 0, 0, 0 };
+    RECT client = { 0, 0, 0, 0 };
     if (have_rect) {
-        want.left = o.x;              want.top = o.y;
-        want.right = o.x + cr.right;  want.bottom = o.y + cr.bottom;
+        client.left = o.x;              client.top = o.y;
+        client.right = o.x + cr.right;  client.bottom = o.y + cr.bottom;
     }
+    // THE PEN IS THE WHOLE WINDOW, FRAME INCLUDED (2026-09-28). Penned to the client
+    // area the pointer could never reach the caption or the borders, so the window
+    // could not be moved or resized while locked. The frame belongs to the game
+    // window, so a click there cannot land on another program -- the thing the lock
+    // exists to stop -- and grabbing it enters the modal loop, which releases the
+    // lock for the drag. GetWindowRect includes Windows' invisible resize borders,
+    // which is where the sizing arrows live. Engaging still needs the pointer over
+    // the CLIENT area: arriving on the frame is not "playing".
+    RECT want = client;
+    RECT wr;
+    if (have_rect && GetWindowRect(gw, &wr) && wr.right > wr.left && wr.bottom > wr.top)
+        want = wr;
 
     POINT p = { 0, 0 };
-    bool inside = have_rect && GetCursorPos(&p) && PtInRect(&want, p);
+    bool inside = have_rect && GetCursorPos(&p) && PtInRect(&client, p);
     // The swapping of primary/secondary buttons does not matter here: any held
     // button means "not now".
     bool held = (GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) |
@@ -172,9 +194,11 @@ static void tick(void)
         real_clip(&want);
         InterlockedExchange(&g_owned, 1);
         InterlockedIncrement(&g_n_engage);
-        logf("[lock] pointer held inside the game window (%ld,%ld)-(%ld,%ld) -- "
-             "Alt+Tab or the Windows key lets it go ([dx] cursor_lock=0 to stop)",
-             want.left, want.top, want.right, want.bottom);
+        logf("[lock] pointer held inside the game window (%ld,%ld)-(%ld,%ld), frame "
+             "included -- Alt+Tab or the Windows key lets it go ([dx] cursor_lock=0 to "
+             "stop); pointer %s over the picture",
+             want.left, want.top, want.right, want.bottom,
+             cursorlock_hide_wanted() ? "HIDDEN" : "shown");
     } else if (drifted) {
         // Moved/resized window, or Windows reset the clip under us. Not logged
         // per event: a resize drag would print hundreds.
@@ -204,9 +228,23 @@ void cursorlock_reassert(void)
     if (w.right > w.left && w.bottom > w.top) real_clip(&w);
 }
 
+bool cursorlock_hide_wanted(void)
+{
+    if (g_hide >= 0) return g_hide != 0;
+    return _stricmp(title_current(), "FrontMissionOnline.dll") == 0;
+}
+
+// Asked by the game window's WM_SETCURSOR and by hook_SetCursor. Only while the
+// lock is engaged, so Alt+Tab, a frame drag or a minimise always shows it again.
+bool cursorlock_hide_now(void)
+{
+    return cursorlock_owns() && cursorlock_hide_wanted();
+}
+
 void cursorlock_configure(const wchar_t* ini)
 {
     g_enable = ini_int_title(L"dx", L"cursor_lock", 1, ini);
+    g_hide   = ini_int_title(L"dx", L"cursor_hide", -1, ini);
     g_wine = under_wine();
     if (g_wine) {
         logf("[lock] Wine/Proton -- the pointer lock stands down (no desktop to escape to)");
@@ -224,6 +262,7 @@ void cursorlock_reload(const wchar_t* ini)
 {
     int was = g_enable;
     g_enable = ini_int_title(L"dx", L"cursor_lock", 1, ini);
+    g_hide   = ini_int_title(L"dx", L"cursor_hide", -1, ini);
     if (was != g_enable)
         logf("[lock] cursor_lock %d -> %d (live)", was, g_enable);
 }
