@@ -650,7 +650,7 @@ static BOOL CALLBACK set_font(HWND c, LPARAM p)
     return TRUE;
 }
 
-static bool ask(const Gathered* g)
+static bool ask(const Gathered* g, HWND owner)
 {
     static bool reg = false;
     HINSTANCE inst = GetModuleHandleW(NULL);
@@ -667,11 +667,17 @@ static bool ask(const Gathered* g)
 
     RECT r = { 0, 0, 440, 320 };
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE);
+    // OWNED BY THE GAME WINDOW. Unowned and merely topmost, the box opened BEHIND
+    // a game on a Linux desktop: Wine marks a window that covers the monitor as
+    // fullscreen, and a window manager stacks a focused fullscreen window above
+    // "always on top" ones. The player saw nothing while the box sat there waiting
+    // for input. A window manager keeps an owned (transient) window above its
+    // owner even when the owner is fullscreen, and Windows does the same.
     HWND h = CreateWindowExW(WS_EX_TOPMOST, L"CrystalModReport", L"Report a problem",
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
                              CW_USEDEFAULT, CW_USEDEFAULT,
                              r.right - r.left, r.bottom - r.top,
-                             NULL, NULL, inst, NULL);
+                             owner, NULL, inst, NULL);
     if (!h) return false;
 
     CreateWindowExW(0, L"STATIC",
@@ -717,6 +723,9 @@ static bool ask(const Gathered* g)
     EnumChildWindows(h, set_font, (LPARAM)GetStockObject(DEFAULT_GUI_FONT));
 
     ShowWindow(h, SW_SHOW); SetForegroundWindow(h); SetFocus(ed);
+    logf("[report] box open (owner %p)%s", (void*)owner,
+         GetForegroundWindow() == h ? "" : " -- but it did NOT get the foreground; "
+         "if the player cannot see it, it is behind the game");
 
     MSG m;
     while (IsWindow(h) && GetMessageW(&m, NULL, 0, 0) > 0) {
@@ -743,19 +752,34 @@ static bool ask(const Gathered* g)
 // ---------------------------------------------------------------------------
 // the key
 // ---------------------------------------------------------------------------
-void polreport_open()
+// The window the key was pressed over, as the box's owner. Only a window of THIS
+// process, and never the Viewer's mask (an invisible window would take the box
+// down with it when the Viewer hides it).
+static HWND report_owner()
 {
-    if (!g_enable) return;
-    if (InterlockedCompareExchange(&g_open, 1, 0) != 0) return;   // already up
+    HWND fg = GetForegroundWindow();
+    if (!fg) return NULL;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (pid != GetCurrentProcessId()) return NULL;
+    HWND root = GetAncestor(fg, GA_ROOT);
+    if (!root) root = fg;
+    char cls[64] = "";
+    GetClassNameA(root, cls, sizeof(cls));
+    if (StrStrIA(cls, "PlayOnlineMask")) return NULL;
+    return root;
+}
 
+static void report_run(HWND owner)
+{
     logf("[report] report key pressed -- gathering before the box opens");
     Gathered g;
     gather(&g);
 
-    // Laid out in 96-DPI constants and opened from the watcher thread, so it
-    // needs the same HiDPI fit the settings dialog uses.
+    // Laid out in 96-DPI constants on a thread of our own, so it needs the same
+    // HiDPI fit the settings dialog uses.
     HANDLE dpi_prev = ui_dpi_fit_begin();
-    bool send_it = ask(&g);
+    bool send_it = ask(&g, owner);
     ui_dpi_fit_end(dpi_prev);
 
     if (send_it) {
@@ -777,9 +801,10 @@ void polreport_open()
                 L"Thanks, your report was sent.\n\n%s%s\n\n"
                 L"If you tell the server's admins about it, include this id.",
                 wid[0] ? L"Report id:  " : L"", wid[0] ? wid : L"");
-            MessageBoxW(NULL, msg, L"Report a problem", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(IsWindow(owner) ? owner : NULL, msg, L"Report a problem",
+                        MB_OK | MB_ICONINFORMATION);
         } else {
-            MessageBoxW(NULL, no_server
+            MessageBoxW(IsWindow(owner) ? owner : NULL, no_server
                 ? L"The report could not be sent: no game server is set up in "
                   L"CrystalMod, so there is nowhere to send it."
                 : L"The report could not be sent: the server did not accept it.\n\n"
@@ -792,5 +817,30 @@ void polreport_open()
     }
 
     gather_free(&g);
+}
+
+static DWORD WINAPI report_thread(LPVOID owner)
+{
+    report_run((HWND)owner);
     InterlockedExchange(&g_open, 0);
+    return 0;
+}
+
+// Called from the settings watcher, which also polls the settings and mapper keys.
+// The report runs on ITS OWN THREAD: when it ran on the watcher, a box stuck behind
+// the game held the watcher in its message loop and Ctrl+Shift+S stopped working
+// until the process exited (reported from Linux, 2026-09-28).
+void polreport_open()
+{
+    if (!g_enable) return;
+    if (InterlockedCompareExchange(&g_open, 1, 0) != 0) return;   // already up
+
+    HWND owner = report_owner();   // read NOW: this is what the player was looking at
+    HANDLE t = CreateThread(NULL, 0, report_thread, (LPVOID)owner, 0, NULL);
+    if (!t) {
+        logf("[report] could not start the report thread (%lu)", GetLastError());
+        InterlockedExchange(&g_open, 0);
+        return;
+    }
+    CloseHandle(t);
 }
