@@ -2214,6 +2214,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     return 0;
                 }
                 if (!wcscmp(opts[i].choices, L"import_char"))      import_character_clicked(h);
+                else if (!wcscmp(opts[i].choices, L"report_now"))  polreport_open_from(h);
                 else if (!wcscmp(opts[i].choices, L"padmap"))
                     SendMessageW(h, WM_COMMAND, MAKEWPARAM(IDC_ABDIAG, BN_CLICKED), 0);
                 else if (!wcscmp(opts[i].choices, L"gamecfg"))
@@ -2916,12 +2917,50 @@ static bool kbd_chord_list_down(const UINT* mods, const UINT* vks, int count)
 // GetAsyncKeyState is SYSTEM-WIDE: without this, Ctrl+Shift+R pressed in a web
 // browser while the Viewer runs behind it would open a report box and screenshot
 // the browser. The report key only counts while one of OUR windows is in front.
-static bool foreground_is_ours()
+//
+// UNDER WINE "in front" can read as something no Windows machine reports while the
+// game has focus: no foreground window at all (the window manager focused a window
+// Wine does not own), or Wine's own desktop window (explorer.exe, with a virtual
+// desktop). Both refused the key silently, and no Linux player had ever filed a
+// report (2026-09-28: one pressed it in Fantasy Earth and nothing happened, while
+// Ctrl+Shift+S, which has no such gate, worked). So under Wine only ANOTHER
+// Windows program in front refuses it -- and every refusal says what was in front.
+static bool report_under_wine()
+{
+    HMODULE nt = GetModuleHandleA("ntdll.dll");
+    return nt && GetProcAddress(nt, "wine_get_version") != NULL;
+}
+
+static bool report_foreground_ok(bool log_refusal)
 {
     HWND fg = GetForegroundWindow();
     DWORD pid = 0;
     if (fg) GetWindowThreadProcessId(fg, &pid);
-    return pid == GetCurrentProcessId();
+    if (pid == GetCurrentProcessId()) return true;
+
+    char cls[64] = "", exe[MAX_PATH] = "";
+    if (fg) GetClassNameA(fg, cls, sizeof(cls));
+    if (pid) {
+        HANDLE ph = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (ph) {
+            DWORD n = sizeof(exe);
+            QueryFullProcessImageNameA(ph, 0, exe, &n);
+            CloseHandle(ph);
+        }
+    }
+    const char* leaf = strrchr(exe, '\\');
+    leaf = leaf ? leaf + 1 : exe;
+    if (report_under_wine() && (!fg || _stricmp(leaf, "explorer.exe") == 0)) {
+        if (log_refusal)
+            logf("[report] key accepted under Wine with %s in front",
+                 fg ? "Wine's desktop window" : "no Windows window");
+        return true;
+    }
+    if (log_refusal)
+        logf("[report] key IGNORED: another program is in front (hwnd %p, class \"%s\", "
+             "%s) -- the report key only works while the game or the Viewer is in front",
+             (void*)fg, cls, leaf[0] ? leaf : "unknown program");
+    return false;
 }
 
 static bool kbd_chord_down()
@@ -2996,7 +3035,7 @@ static bool pad_chord_down()
 static DWORD WINAPI watcher(LPVOID)
 {
     xinput_resolve();
-    bool was = false, was_ui = false, was_rp = false, was_dp = false;
+    bool was = false, was_ui = false, was_rp = false, was_dp = false, was_rp_keys = false;
     for (;;) {
         // The MAPPER chord is tested first and, when it fires, consumes the tick. The
         // two chords share the `back` button, so a settings chord pressed a frame later
@@ -3011,11 +3050,15 @@ static DWORD WINAPI watcher(LPVOID)
         // `back` with the settings chord's `back+start`, and a player rolling a thumb
         // across both would otherwise get the settings dialog stacked behind the
         // report box. Tested before settings because it is the one pressed in a hurry.
-        bool rp = !ui && foreground_is_ours() && polreport_armed() &&
-                  (kbd_chord_list_down(g_rp_hk_mods, g_rp_hk_vk, g_rp_hk_count) ||
-                   pad_mask_down(g_rp_pad_mask));
+        bool rp_keys = !ui && polreport_armed() &&
+                       (kbd_chord_list_down(g_rp_hk_mods, g_rp_hk_vk, g_rp_hk_count) ||
+                        pad_mask_down(g_rp_pad_mask));
+        // The gate is asked on the press itself (logging its answer), then held for
+        // as long as the keys stay down, so one press cannot fire twice.
+        bool rp = rp_keys && (was_rp_keys ? was_rp : report_foreground_ok(true));
         if (rp && !was_rp && !padoverlay_active()) polreport_open();   // edge-triggered
         was_rp = rp;
+        was_rp_keys = rp_keys;
 
         // THE DISPLAY SWITCH, edge-triggered like the others. Alt+Enter shares
         // nothing with the chords above, so it does not consume the tick.

@@ -140,6 +140,56 @@ static void reg_str(HKEY root, const wchar_t* sub, const wchar_t* name, char* ou
         to_utf8(w, out, cch);
 }
 
+// --- wine / proton ---------------------------------------------------------------
+// Only under Wine. On Linux most of what decides a graphics problem is on the Linux
+// side -- which Proton, whether d3d8 is DXVK or wined3d, X11 or Wayland, which
+// desktop -- and the only view of it from in here is the environment Proton hands
+// the game. Values under the Linux home directory are shortened to ~, as Windows
+// profile paths are to %USERPROFILE%.
+static void sec_wine(Out* o)
+{
+    HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+    if (!nt || !GetProcAddress(nt, "wine_get_version")) return;
+    out_fmt(o, "[wine]\n");
+    typedef void (__cdecl *PFN_host)(const char**, const char**);
+    PFN_host hv = (PFN_host)GetProcAddress(nt, "wine_get_host_version");
+    if (hv) {
+        const char *sys = NULL, *rel = NULL;
+        hv(&sys, &rel);
+        out_fmt(o, "host: %s %s\n", sys ? sys : "?", rel ? rel : "?");
+    }
+    char home[MAX_PATH] = "";
+    GetEnvironmentVariableA("HOME", home, sizeof(home));
+    size_t hl = strlen(home);
+    static const char* kVars[] = {
+        "SteamGameId", "STEAM_COMPAT_TOOL_PATHS", "PROTON_LOG", "PROTON_LOG_DIR",
+        "PROTON_USE_WINED3D", "PROTON_DXVK_D3D8", "PROTON_ENABLE_WAYLAND",
+        "PROTON_NO_FSYNC", "PROTON_NO_ESYNC", "WINEDLLOVERRIDES", "WINEDEBUG",
+        "DXVK_HUD", "DXVK_LOG_LEVEL", "DXVK_LOG_PATH", "DXVK_CONFIG_FILE",
+        "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "WAYLAND_DISPLAY", "DISPLAY",
+        "GAMESCOPE_WAYLAND_DISPLAY", "SteamDeck", "LD_PRELOAD", "MANGOHUD",
+        "ENABLE_VKBASALT",
+    };
+    for (size_t i = 0; i < sizeof(kVars) / sizeof(kVars[0]); i++) {
+        char v[1024];
+        DWORD n = GetEnvironmentVariableA(kVars[i], v, sizeof(v));
+        if (!n || n >= sizeof(v)) continue;
+        char shown[1024] = "";
+        size_t w = 0;
+        for (const char* p = v; *p && w + 2 < sizeof(shown); ) {
+            if (hl && strncmp(p, home, hl) == 0) { shown[w++] = '~'; p += hl; }
+            else shown[w++] = *p++;
+        }
+        shown[w] = 0;
+        out_fmt(o, "%s=%s\n", kVars[i], shown);
+    }
+    char pl[8] = "";
+    if (!GetEnvironmentVariableA("PROTON_LOG", pl, sizeof(pl)) || pl[0] != '1')
+        out_fmt(o, "proton_log: off -- launch with PROTON_LOG=1 %%command%% in Steam's "
+                   "Launch Options to include Proton's own log in the next report\n");
+    out_fmt(o, "\n");
+}
+
 static void sec_gpus(Out* o)
 {
     out_fmt(o, "[gpus]\n");
@@ -415,6 +465,7 @@ char* sysdiag_collect(DWORD* out_len)
 
     out_fmt(&o, "HippaulMod diagnostics, collected when the report key was pressed.\n\n");
     sec_system(&o);
+    sec_wine(&o);
     sec_gpus(&o);
     sec_monitors(&o);
     sec_compat(&o);

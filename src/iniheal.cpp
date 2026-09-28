@@ -761,6 +761,9 @@ static const ShimOption g_opts[] = {
   // (services/issuereport.py). On by default because it never acts on its own:
   // nothing leaves the machine until a person presses the key, reads a box that
   // says what will be sent, and clicks Send.
+  // The same report from a click, for a player whose hotkey does nothing (a Linux
+  // desktop, 2026-09-28): the box opens over this window, which they can see.
+  { NULL, NULL, NULL, OPT_BUTTON, L"Report a problem now...", L"report_now", false, NULL },
   { L"report",    L"enable",         L"1",    OPT_BOOL, L"Let me report a problem with a hotkey", NULL, false,
     L"Nothing is sent until you press the key and click Send." },
   { L"report",    L"hotkey",         POLREPORT_DEFAULT_HOTKEY, OPT_TEXT, L"Report a problem hotkey", NULL, false,
@@ -779,6 +782,16 @@ static const ShimOption g_opts[] = {
   // Turning this off sends passwords and login tokens with the log. A developer
   // row only, so that unticking it is a deliberate act.
   { L"logship",   L"redact",         L"1",    OPT_BOOL, L"Remove passwords from reports",       NULL, true },
+  // LIVE LOG (logship.cpp). For a problem a single report cannot catch: the log
+  // goes to the server as it is written. Visible rather than a developer row,
+  // because the person who turns it on is a player someone asked to. It turns
+  // itself off after live_minutes, counted across restarts (live_until), so a
+  // forgotten tick cannot stream for ever.
+  { L"logship",   L"live",           L"0",    OPT_BOOL, L"Send my log to the server as I play", NULL, false,
+    L"Only when someone helping you asks. Turns itself off after 30 minutes. "
+    L"Passwords are removed first." },
+  { L"logship",   L"live_minutes",   L"30",   OPT_TEXT, L"Live log turns off after (minutes)", NULL, true },
+  { L"logship",   L"live_until",     L"0",    OPT_HIDDEN, L"When the live log turns off (the shim writes this)", NULL },
 
   // ==========================================================================
   { NULL, NULL, NULL, OPT_GROUP, L"Other", L"Other", false, NULL },

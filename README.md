@@ -106,6 +106,22 @@ The server answers with a report id; include it if you talk to the server's
 admins about the problem. Each part can be switched off under "Reporting a
 problem" in the settings dialog, or in `polshim.ini` (`[report]`).
 
+If the key does nothing, open the settings window (Ctrl+Shift+S) and use
+**Report a problem now...** under "Reporting a problem". It sends the same
+report.
+
+On Linux and Steam Deck a report also carries Proton's own log and DXVK's
+logs when they exist. Proton only writes its log when the game is started
+with `PROTON_LOG=1 %command%` in Steam's Launch Options.
+
+### Live log
+
+For a problem that takes a while to show up, tick **Send my log to the
+server as I play** under "Reporting a problem", when someone helping you
+asks. The log then goes to the server every few seconds, with passwords
+removed, and the title bar says so. It turns itself off after 30 minutes,
+including across restarts.
+
 ## Build
 
 `build.bat` with Visual Studio 2022 (x86 tools) produces `build\PolHook.dll`

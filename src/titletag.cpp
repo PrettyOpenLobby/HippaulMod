@@ -253,9 +253,17 @@ static void desired_tag(wchar_t* out, size_t cch)
     // " | HOME 198.51.100.10", or nothing at all while the name has not resolved
     // yet. Deliberately ABSENT rather than guessed: "no answer yet" and "the
     // dev box" must not look the same on screen.
-    wchar_t srv[96] = L"";
+    wchar_t srv[144] = L"";
     if (g_show_server && g_server[0])
         _snwprintf_s(srv, _countof(srv), _TRUNCATE, L" | %s", g_server);
+    // While the live log is on it is sending the player's log, so it says so
+    // where they look, with the time it has left.
+    int live = logship_live_minutes_left();
+    if (live > 0) {
+        size_t n = wcslen(srv);
+        _snwprintf_s(srv + n, _countof(srv) - n, _TRUNCATE,
+                     L" | sending log, %d min left", live);
+    }
 
     int pend = autoupdate_pending_build();
 #ifdef POLSHIM_RELEASE
@@ -278,7 +286,7 @@ static void desired_tag(wchar_t* out, size_t cch)
                      POLSHIM_VERSION, POLSHIM_BUILD, srv);
 #endif
 }
-
+
 // Our tag in a caption. Builds before the HippaulMod rename tagged " [PoL-Shim ",
 // so both are ours to strip.
 static wchar_t* find_our_tag(wchar_t* cur)

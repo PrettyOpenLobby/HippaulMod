@@ -398,6 +398,9 @@ static BOOL CALLBACK pick_proc(HWND h, LPARAM lp)
     if (GetWindow(h, GW_OWNER)) return TRUE;            // top-level only
     char cls[64] = ""; GetClassNameA(h, cls, sizeof(cls));
     if (StrStrIA(cls, "PlayOnlineMask")) return TRUE;   // the Viewer's black cover
+    // Our own windows are never the picture: opened from the settings window, that
+    // window is in front, and a screenshot of it would show nothing about the game.
+    if (StrStrIA(cls, "PolShim") == cls || StrStrIA(cls, "HippaulMod") == cls) return TRUE;
     RECT r; if (!GetWindowRect(h, &r)) return TRUE;
     long area = (long)(r.right - r.left) * (r.bottom - r.top);
     if (area <= 0) return TRUE;
@@ -454,7 +457,7 @@ static bool capture_png(const wchar_t* path, int* out_w, int* out_h)
 // gathering -- runs at the KEYPRESS, before the dialog
 // ---------------------------------------------------------------------------
 
-#define RP_MAX_FILES 6
+#define RP_MAX_FILES 10   // log, prev log, ini, diag, shot, proton, two dxvk
 
 struct Gathered {
     const char*   names[RP_MAX_FILES];
@@ -501,6 +504,72 @@ static char* slurp(const wchar_t* path, DWORD cap, DWORD* out_len)
     buf[got] = 0;
     if (out_len) *out_len = got;
     return buf;
+}
+
+// A Linux path as Wine sees it: Z: is the Linux root.
+static bool linux_to_wine(const char* unix_path, wchar_t* out, size_t cch)
+{
+    if (!unix_path || unix_path[0] != '/') return false;
+    wchar_t w[MAX_PATH];
+    if (!MultiByteToWideChar(CP_UTF8, 0, unix_path, -1, w, MAX_PATH)) return false;
+    _snwprintf_s(out, cch, _TRUNCATE, L"Z:%s", w);
+    for (wchar_t* p = out; *p; ++p) if (*p == L'/') *p = L'\\';
+    return true;
+}
+
+static void attach_if_there(Gathered* g, const wchar_t* path, const char* name)
+{
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return;
+    DWORD len = 0;
+    char* body = logship_snapshot_redacted(path, g_max_log, &len);
+    if (!body) return;
+    gather_add(g, name, body, len);
+    logf("[report] attached %s (%lu bytes)", name, (unsigned long)len);
+}
+
+static void attach_linux_logs(Gathered* g)
+{
+    HMODULE nt = GetModuleHandleA("ntdll.dll");
+    if (!nt || !GetProcAddress(nt, "wine_get_version")) return;
+
+    // Proton writes steam-<appid>.log to PROTON_LOG_DIR, or to $HOME.
+    char dir[MAX_PATH] = "", id[32] = "";
+    if (!GetEnvironmentVariableA("PROTON_LOG_DIR", dir, sizeof(dir)))
+        GetEnvironmentVariableA("HOME", dir, sizeof(dir));
+    if (!GetEnvironmentVariableA("SteamGameId", id, sizeof(id)))
+        GetEnvironmentVariableA("SteamAppId", id, sizeof(id));
+    if (dir[0] && id[0]) {
+        char up[MAX_PATH];
+        _snprintf_s(up, sizeof(up), _TRUNCATE, "%s/steam-%s.log", dir, id);
+        wchar_t wp[MAX_PATH];
+        if (linux_to_wine(up, wp, _countof(wp))) attach_if_there(g, wp, "proton.log");
+    }
+
+    // DXVK names its logs after the exe (pol_d3d8.log) and writes them beside it,
+    // or into DXVK_LOG_PATH.
+    wchar_t exedir[MAX_PATH] = L"";
+    GetModuleFileNameW(NULL, exedir, MAX_PATH);
+    wchar_t* slash = wcsrchr(exedir, L'\\');
+    if (slash) *slash = 0;
+    char dxp[MAX_PATH] = "";
+    wchar_t dxdir[MAX_PATH] = L"";
+    if (GetEnvironmentVariableA("DXVK_LOG_PATH", dxp, sizeof(dxp)) &&
+        !linux_to_wine(dxp, dxdir, _countof(dxdir)))
+        MultiByteToWideChar(CP_UTF8, 0, dxp, -1, dxdir, MAX_PATH);
+    const wchar_t* dirs[] = { dxdir, exedir };
+    const wchar_t* leaves[] = { L"pol_d3d8.log", L"pol_d3d9.log" };
+    const char* names[] = { "dxvk_d3d8.log", "dxvk_d3d9.log" };
+    for (int i = 0; i < 2; i++) {
+        for (int d = 0; d < 2; d++) {
+            if (!dirs[d][0]) continue;
+            wchar_t p[MAX_PATH];
+            _snwprintf_s(p, _countof(p), _TRUNCATE, L"%s\\%s", dirs[d], leaves[i]);
+            if (GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES) {
+                attach_if_there(g, p, names[i]);
+                break;
+            }
+        }
+    }
 }
 
 static void gather(Gathered* g)
@@ -571,6 +640,13 @@ static void gather(Gathered* g)
             gather_add(g, "polshim.ini", ini, ilen);
         }
     }
+
+    // PROTON AND DXVK LOGS, when the player has them. Under Proton the answer to a
+    // graphics problem is often only in these: which d3d8 Proton put in the prefix,
+    // what DXVK made of the device, what Wine complained about. Neither exists
+    // unless the player launched with PROTON_LOG=1 (or set DXVK_LOG_LEVEL), so
+    // their absence is normal; diag.txt's [wine] section says how to turn them on.
+    if (g_diag) attach_linux_logs(g);
 }
 
 // ---------------------------------------------------------------------------
@@ -836,6 +912,23 @@ void polreport_open()
     if (InterlockedCompareExchange(&g_open, 1, 0) != 0) return;   // already up
 
     HWND owner = report_owner();   // read NOW: this is what the player was looking at
+    HANDLE t = CreateThread(NULL, 0, report_thread, (LPVOID)owner, 0, NULL);
+    if (!t) {
+        logf("[report] could not start the report thread (%lu)", GetLastError());
+        InterlockedExchange(&g_open, 0);
+        return;
+    }
+    CloseHandle(t);
+}
+
+// "Report a problem now..." in the settings window. The same report, for a player
+// whose hotkey does nothing: the box belongs to the settings window, which that
+// player can already see, so it cannot open somewhere they cannot. Not gated on
+// [report] enable -- that switch is about the hotkey, and this is a click.
+void polreport_open_from(HWND owner)
+{
+    if (InterlockedCompareExchange(&g_open, 1, 0) != 0) return;   // already up
+    logf("[report] opened from the settings window");
     HANDLE t = CreateThread(NULL, 0, report_thread, (LPVOID)owner, 0, NULL);
     if (!t) {
         logf("[report] could not start the report thread (%lu)", GetLastError());

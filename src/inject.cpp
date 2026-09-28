@@ -2042,6 +2042,7 @@ static void startup()
     // report key gathers and asks first, and only the player's Send posts it.
     logship_configure(ini, logpath);   // the report's log snapshot + redaction + endpoint
     polreport_configure(ini);   // reads [report]; the player's one-key bug report
+    logship_live_start();       // [logship] live: only if ticked and not timed out
     polsettings_start(ini);     // reads [settings]; watcher thread for the settings-dialog chord
 
     logf("[init] polshim in pid %lu; targets=%d verbose=%d capture=%d dx=%d comtrace=%d redirect=%d",
@@ -2176,6 +2177,8 @@ void shim_reload(const wchar_t* ini)
     titletag_reload(ini);
     ffxiplug_reload(ini);
     crashlog_reload(ini);
+    logship_reload(ini);        // the live log's tick applies on Save
+    polreport_configure(ini);
 
     logf("[reload] settings re-read; verbose=%d capture=%d/%d noupdate=%d comproxy=%d",
          g_verbose, g_capture, g_capture_max, g_noupdate, g_comproxy);

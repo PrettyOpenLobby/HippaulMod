@@ -1029,6 +1029,10 @@ void   ui_dpi_fit_end(HANDLE prev);
 // polreport.cpp -- the report key: the player files a bug report in one step.
 void  polreport_configure(const wchar_t* ini);
 void  polreport_open();                   // gather, ask, send, on a thread of its own
+void  polreport_open_from(HWND owner);     // the same, from the settings window's button
+void  logship_live_start(void);             // [logship] live: start streaming if it is on and not expired
+void  logship_reload(const wchar_t* ini);   // live re-read from the settings dialog
+int   logship_live_minutes_left(void);      // >0 while streaming (the title bar says so)
 int   polreport_armed();                  // [report] enable, after configure
 // The bundle builder. services/issuereport.py (parse_bundle) is the other half of
 // this format and the two must agree byte for byte. Caller free()s; `desc` is UTF-8.
