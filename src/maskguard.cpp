@@ -617,10 +617,20 @@ static BOOL CALLBACK pick_sibling(HWND h, LPARAM lp)
     //
     // Anything the shim creates must be excluded here. A cosmetic window of ours
     // is not the Viewer still being alive.
+    //
+    // NEITHER ARE IME WINDOWS. Wine (Proton 11, measured 2026-09-28) gives every
+    // GUI thread an UN-OWNED "Default IME" top-level window -- the mask's own
+    // thread included -- where the earlier hang above had it owned by the mask.
+    // Counted as a sibling, it kept the close pending for ever: every Viewer exit
+    // on Linux left pol.exe running with exactly PlayOnlineMaskUS + Default IME,
+    // and Steam showed the game as still open. "MSCTFIME UI" is Windows' TSF
+    // equivalent of the same thing.
     {
         char cls[64] = "";
         GetClassNameA(h, cls, sizeof(cls));
         if (strcmp(cls, "PolShimBackdrop") == 0) return TRUE;
+        if (strcmp(cls, "IME") == 0 || strcmp(cls, "MSCTFIME UI") == 0 ||
+            strcmp(cls, "Wine IME") == 0) return TRUE;
     }
     s->found = 1;
     return FALSE;                              // one is enough; stop enumerating
