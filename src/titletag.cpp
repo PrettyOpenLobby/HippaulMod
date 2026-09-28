@@ -2,7 +2,7 @@
 //
 // So a user can see at a glance WHICH shim build is running, and therefore whether
 // the latest update has reached them over the patch channel. Deliberately
-// unobtrusive: it only APPENDS " [PoL-Shim vX.Y.Z]" to the existing caption, never
+// unobtrusive: it only APPENDS " [HippaulMod vX.Y.Z]" to the existing caption, never
 // replaces it, and touches nothing else on screen.
 //
 // [polshim] titletag=1 (default on) enables it. A tiny worker thread finds this
@@ -22,7 +22,7 @@ static char   g_probe[64] = "ci000.pol.com";  // [polshim] titletag_probe
 static wchar_t g_names[512] = L"";            // [polshim] titletag_names
 static wchar_t g_server[80] = L"";            // resolved label, empty until known
 static DWORD  g_server_at = 0;                // GetTickCount of that resolve
-static char   g_tag[64]  = "";        // " [PoL-Shim vX.Y.Z]" (ASCII; widened on use)
+static char   g_tag[64]  = "";        // " [HippaulMod vX.Y.Z]" (ASCII; widened on use)
 static HANDLE g_thread   = NULL;
 static volatile LONG g_stop = 0;
 
@@ -32,7 +32,7 @@ static void build_tag()
     // cannot answer "did my update actually land?" -- which is the question the tag is
     // there to answer in the first place.
     if (!g_tag[0])
-        _snprintf_s(g_tag, sizeof(g_tag), _TRUNCATE, " [PoL-Shim v%s b%d]",
+        _snprintf_s(g_tag, sizeof(g_tag), _TRUNCATE, " [HippaulMod v%s b%d]",
                     POLSHIM_VERSION, POLSHIM_BUILD);
 }
 
@@ -254,14 +254,22 @@ static void desired_tag(wchar_t* out, size_t cch)
 
     int pend = autoupdate_pending_build();
     if (pend > 0)
-        _snwprintf_s(out, cch, _TRUNCATE, L" [PoL-Shim v%S b%d -> b%d: RESTART to apply%s]",
+        _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod v%S b%d -> b%d: RESTART to apply%s]",
                      POLSHIM_VERSION, POLSHIM_BUILD, pend, srv);
     else if (pend < 0)      // updated, but the new DLL carries no build marker
-        _snwprintf_s(out, cch, _TRUNCATE, L" [PoL-Shim v%S b%d -- update ready: RESTART%s]",
+        _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod v%S b%d -- update ready: RESTART%s]",
                      POLSHIM_VERSION, POLSHIM_BUILD, srv);
     else
-        _snwprintf_s(out, cch, _TRUNCATE, L" [PoL-Shim v%S b%d%s]",
+        _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod v%S b%d%s]",
                      POLSHIM_VERSION, POLSHIM_BUILD, srv);
+}
+
+// Our tag in a caption. Builds before the HippaulMod rename tagged " [PoL-Shim ",
+// so both are ours to strip.
+static wchar_t* find_our_tag(wchar_t* cur)
+{
+    wchar_t* t = wcsstr(cur, L" [HippaulMod ");
+    return t ? t : wcsstr(cur, L" [PoL-Shim ");
 }
 
 static void apply_once()
@@ -277,7 +285,7 @@ static void apply_once()
     // original caption is retained -- the tag is only ever APPENDED -- so
     // stripping our own marker restores it exactly. Cheap when already clean.
     if (!g_titletag) {
-        wchar_t* mine = wcsstr(cur, L" [PoL-Shim ");
+        wchar_t* mine = find_our_tag(cur);
         if (mine) { *mine = 0; SetWindowTextW(h, cur); }
         return;
     }
@@ -289,7 +297,7 @@ static void apply_once()
     // Strip any earlier tag of ours before appending, or a caption that was
     // tagged before an update would end up carrying both. The marker is the
     // opening bracket of our own tag, which the Viewer's own captions never use.
-    wchar_t* old = wcsstr(cur, L" [PoL-Shim ");
+    wchar_t* old = find_our_tag(cur);
     if (old) *old = 0;
 
     wchar_t next[760];

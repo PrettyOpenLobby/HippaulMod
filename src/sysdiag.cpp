@@ -413,7 +413,7 @@ char* sysdiag_collect(DWORD* out_len)
     o.p[0] = 0;
     if (!GetEnvironmentVariableW(L"USERPROFILE", g_profile, MAX_PATH)) g_profile[0] = 0;
 
-    out_fmt(&o, "CrystalMod diagnostics, collected when the report key was pressed.\n\n");
+    out_fmt(&o, "HippaulMod diagnostics, collected when the report key was pressed.\n\n");
     sec_system(&o);
     sec_gpus(&o);
     sec_monitors(&o);

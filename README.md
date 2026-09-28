@@ -1,4 +1,6 @@
-# CrystalMod
+# HippaulMod
+
+Formerly CrystalMod. Existing installs keep updating on their own; nothing needs reinstalling.
 
 A small in-process add-on for Square Enix's PlayOnline Viewer that lets an
 unmodified client talk to a private server (such as OpenLobby) and run its
@@ -77,7 +79,7 @@ and `install.sh` compare against.
 ## Reporting a problem
 
 Press **Ctrl+Shift+R** (or View + right shoulder on a controller) while the
-Viewer or a game is in front. CrystalMod takes a screenshot at that moment,
+Viewer or a game is in front. HippaulMod takes a screenshot at that moment,
 then opens a box where you describe what went wrong. Nothing is sent until
 you click **Send report**; Cancel throws everything away.
 
@@ -87,7 +89,7 @@ never anywhere if no server is set up) and contains:
 - your description and the kind of problem you picked;
 - your computer's name, the Windows version and the PlayOnline session id
   (so the server can find the same minutes in its own logs);
-- the end of this session's CrystalMod log (and the previous session's, if
+- the end of this session's HippaulMod log (and the previous session's, if
   it crashed), and your `polshim.ini`, with passwords, login tokens and
   session keys blanked out first;
 - a picture of the game window;

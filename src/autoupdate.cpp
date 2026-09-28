@@ -137,6 +137,14 @@
 extern "C" __declspec(dllexport) const char polshim_build_marker[] =
     "POLSHIM_BUILD_MARKER=" POLSHIM_STR(POLSHIM_BUILD) "=";
 
+// The identity marker. install.sh tells OUR proxy from Square Enix's PolHook.dll by
+// finding ASCII text in the file, and every install.sh before the HippaulMod rename
+// looks for "PoL-Shim". A DLL without it would be taken for SE's by such an installer,
+// renamed to PolHook_orig.dll, and the proxy would forward to itself. Kept for as long
+// as those installers are in players' hands.
+extern "C" __declspec(dllexport) const char polshim_identity_marker[] =
+    "HippaulMod (formerly CrystalMod, PoL-Shim)";
+
 static int      g_enable   = 0;
 static int      g_delay_ms = 10000;
 // [autoupdate] interval_min -- keep checking while the Viewer is open, not just
@@ -616,14 +624,14 @@ static void notify(int newbuild)
     else              _snprintf_s(who, sizeof(who), _TRUNCATE, "a newer build");
     char msg[320];
     _snprintf_s(msg, sizeof(msg), _TRUNCATE,
-                "A newer PlayOnline shim (%s) has been installed.\n\n"
+                "A newer HippaulMod (%s) has been installed.\n\n"
                 "You are currently running build %d. Close and reopen PlayOnline "
                 "to start using it.\n\nNothing else needs to be done.",
                 who, POLSHIM_BUILD);
     // MB_SETFOREGROUND only; no owner window. The Viewer's own windows live on
     // other threads and owning a box across threads is how you deadlock a message
     // pump that is mid-present.
-    MessageBoxA(NULL, msg, "PlayOnline shim updated",
+    MessageBoxA(NULL, msg, "HippaulMod updated",
                 MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
 }
 

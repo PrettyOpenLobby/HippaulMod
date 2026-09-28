@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# PoL-Shim installer for Linux / Steam Deck (PlayOnline under Proton/Wine).
+# HippaulMod installer for Linux / Steam Deck (PlayOnline under Proton/Wine).
 #
 # pol.exe statically imports PolHook.dll, so dropping our proxy in its place makes
 # pol.exe load the whole shim BY ITSELF -- no injector, no admin. The proxy forwards
@@ -560,11 +560,11 @@ set_dxvk_d3d8_in() {
     grep -qE '^[[:space:]]*user_settings[[:space:]]*=[[:space:]]*\{' "$us" \
       || { echo "unrecognised"; return 0; }
     cp -n "$us" "$us.bak-polshim" 2>/dev/null || true
-    sed -i '0,/^[[:space:]]*user_settings[[:space:]]*=[[:space:]]*{/s//&\n    "PROTON_DXVK_D3D8": "1",   # PoL-Shim: d3d8 -> DXVK (Vulkan)/' "$us"
+    sed -i '0,/^[[:space:]]*user_settings[[:space:]]*=[[:space:]]*{/s//&\n    "PROTON_DXVK_D3D8": "1",   # HippaulMod: d3d8 -> DXVK (Vulkan)/' "$us"
   else
     printf '%s\n' \
       'user_settings = {' \
-      '    "PROTON_DXVK_D3D8": "1",   # PoL-Shim: d3d8 -> DXVK (Vulkan)' \
+      '    "PROTON_DXVK_D3D8": "1",   # HippaulMod: d3d8 -> DXVK (Vulkan)' \
       '}' > "$us"
     fix_owner "$us"
   fi
@@ -609,8 +609,8 @@ revert_dxvk_d3d8() {
   while IFS= read -r d; do
     us="$d/user_settings.py"
     [ -f "$us" ] || continue
-    grep -q 'PoL-Shim: d3d8 -> DXVK' "$us" || continue    # not a line we wrote
-    sed -i '/PoL-Shim: d3d8 -> DXVK/d' "$us"
+    grep -qE '(PoL-Shim|HippaulMod): d3d8 -> DXVK' "$us" || continue    # not a line we wrote (either name)
+    sed -i -E '/(PoL-Shim|HippaulMod): d3d8 -> DXVK/d' "$us"
     # Delete only a file that is now an EMPTY dict -- i.e. one WE created. Anything
     # with keys left is the user's. This first tested for a double-quoted key line,
     # which would have DELETED a hand-written file that quotes with ' (all four on
@@ -646,7 +646,7 @@ fi
 # build, and their players should not be handed it for pointing the shim there.
 # POLSHIM_UPDATE_URL=<url> overrides; POLSHIM_UPDATE_URL=server restores the old
 # http://<server>/shim/dist for an operator who hosts their own build.
-GITHUB_BASE="https://github.com/PrettyOpenLobby/CrystalMod/releases/latest/download"
+GITHUB_BASE="https://github.com/PrettyOpenLobby/HippaulMod/releases/latest/download"
 BASE_URL="${POLSHIM_UPDATE_URL:-$GITHUB_BASE}"
 if [ "$BASE_URL" = "server" ]; then
   BASE_URL=""
@@ -702,11 +702,12 @@ fix_owner(){ [ -n "$DIR_OWNER" ] && chown "$DIR_OWNER" "$@" 2>/dev/null || true;
 # Wine's filesystem is case-sensitive on Linux; find the real casing of each file.
 find_ci(){ find "$DIR" -maxdepth 1 -iname "$1" 2>/dev/null | head -1; }
 
-# Is this file OUR proxy rather than SE's DLL? Our build carries the "PoL-Shim" title
+# Is this file OUR proxy rather than SE's DLL? Our build carries the "HippaulMod" title
 # tag; SE's does not (verified against the US PolHook.dll, PolHook_orig.dll and the
 # EU/JP polhook.dll -- 0 hits in each, 2 in ours). Used to refuse the two arrangements
 # that would create a proxy-forwards-to-proxy loop.
-is_our_proxy(){ [ -n "$1" ] && [ -f "$1" ] && grep -qa "PoL-Shim" "$1" 2>/dev/null; }
+# ("PoL-Shim" before the rename; newer builds carry both).
+is_our_proxy(){ [ -n "$1" ] && [ -f "$1" ] && grep -qaE "HippaulMod|PoL-Shim" "$1" 2>/dev/null; }
 
 POL="$(find_ci pol.exe)"
 [ -n "$POL" ] || die "pol.exe not found in '$DIR' -- is this the PlayOnlineViewer folder?"
@@ -885,7 +886,7 @@ install_steam_shortcuts || true
 cat <<EOF
 
 [+] DONE  (install: $DIR${SERVER:+ , server: $SERVER})
-Just launch the game normally -- the title bar should end with '[PoL-Shim v0.1.0]'.
+Just launch the game normally -- the title bar should end with '[HippaulMod v...]'.
   - Server:      baked into polshim.ini (change it by re-running, or edit [redirect] server=).
   - Controller:  on by default; [inputmode] mode=off for kb/mouse, swap_confirm=1 to swap A/B.
   - Speed:       d3d8 -> DXVK enabled in Proton (Tetra Master / FFXI / Fantasy Earth).

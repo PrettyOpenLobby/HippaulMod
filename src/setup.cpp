@@ -1,5 +1,5 @@
 // =============================================================================
-// PolShimSetup.exe -- ONE-FILE installer for the self-loading PoL-Shim.
+// PolShimSetup.exe -- ONE-FILE installer for the self-loading HippaulMod.
 //
 // WHY THIS EXISTS (and not the PowerShell script it replaces):
 //   Install-PolHookProxy.ps1 works, but a .ps1 downloaded from the web carries
@@ -491,13 +491,13 @@ static int do_revert(const char* dir)
 static void usage(void)
 {
     printf(
-      "PoL-Shim setup " POLSHIM_VERSION " (build %d)\n\n"
+      "HippaulMod setup " POLSHIM_VERSION " (build %d)\n\n"
       "  PolShimSetup.exe [options]\n\n"
       "  --dir=<path>      PlayOnlineViewer folder (default: auto-detect, then ask)\n"
       "  --server=<addr>   server to point the client at, a name or an IP address\n"
       "                    (default: ask, offering play.openlobby.fyi)\n"
       "  --gamepad         force controller mode ([inputmode] mode=force_gamepad)\n"
-      "  --no-update       do not fetch a newer shim from the server first\n"
+      "  --no-update       do not fetch a newer HippaulMod from the server first\n"
       "  --update-url=<u>  where to fetch it from: a URL, or `server` for\n"
       "                    http://<server>/shim/dist (default: the project's latest\n"
       "                    GitHub release)\n"
@@ -533,7 +533,7 @@ int main(int argc, char** argv)
         else { usage(); return fail("unrecognised option: %s", a); }
     }
 
-    printf("\n=== PoL-Shim setup " POLSHIM_VERSION " (build %d) ===\n\n", POLSHIM_BUILD);
+    printf("\n=== HippaulMod setup " POLSHIM_VERSION " (build %d) ===\n\n", POLSHIM_BUILD);
 
     // --- 1. where is the Viewer -------------------------------------------------
     if (!dir[0] && !viewer_dir_from_registry(dir, sizeof(dir)) && !viewer_dir_from_guess(dir, sizeof(dir))) {
@@ -560,7 +560,7 @@ int main(int argc, char** argv)
     // without touching anything -- the first question in any support exchange, and
     // the only way to exercise auto-detect without committing to an install.
     if (where) {
-        info("Shim installed here: %s", file_exists(orig) ? "YES (PolHook_orig.dll present)" : "no");
+        info("HippaulMod installed here: %s", file_exists(orig) ? "YES (PolHook_orig.dll present)" : "no");
         {
             FileTxtReport ft;
             bool okft = filetxt_sync(dir, "PolHook.dll", false, &ft);
@@ -656,7 +656,7 @@ int main(int argc, char** argv)
                 char want[65]; memcpy(want, sha, 64); want[64] = 0;
                 char have[65]; sha256_hex(dll, dll_len, have);
                 if (_stricmp(want, have) == 0) {
-                    info("Server has the same shim as this installer -- using the built-in copy.");
+                    info("Server has the same HippaulMod as this installer -- using the built-in copy.");
                 } else {
                     _snprintf_s(u, sizeof(u), _TRUNCATE, "%s/PolHook.dll", update_url);
                     DWORD dn = 0;
@@ -669,14 +669,14 @@ int main(int argc, char** argv)
                         // versions, and a rebuild of the same source changes the PE
                         // timestamp -- so a difference does not prove newness. The
                         // server is authoritative either way.
-                        ok("Using the server's shim (%lu bytes, hash verified).", dn);
+                        ok("Using the server's HippaulMod (%lu bytes, hash verified).", dn);
                     } else {
                         free(got);
-                        warn("Server copy did not verify -- installing the built-in shim instead.");
+                        warn("Server copy did not verify -- installing the built-in HippaulMod instead.");
                     }
                 }
             } else {
-                info("No update source reachable at %s -- installing the built-in shim.", update_url);
+                info("No update source reachable at %s -- installing the built-in HippaulMod.", update_url);
             }
             free(sha);
             break;                              // a door answered; do not try the other
@@ -685,7 +685,7 @@ int main(int argc, char** argv)
 
     // --- 4. swap ---------------------------------------------------------------
     if (file_exists(orig)) {
-        info("Already installed here -- updating the shim, keeping the existing backup.");
+        info("Already installed here -- updating HippaulMod, keeping the existing backup.");
     } else {
         if (!CopyFileA(hook, bak, FALSE))
             warn("Could not write %s (error %lu) -- continuing; PolHook_orig.dll is the real backup.",
@@ -705,7 +705,7 @@ int main(int argc, char** argv)
         free(downloaded);
         return fail("Could not write PolHook.dll (error %lu). Nothing was changed.", e);
     }
-    ok("Installed the shim as %s (%lu bytes)", hook, dll_len);
+    ok("Installed HippaulMod as %s (%lu bytes)", hook, dll_len);
     free(downloaded);
 
     // KEEP file.txt IN STEP, in the same breath as the swap. The manifest still
@@ -719,7 +719,7 @@ int main(int argc, char** argv)
         FileTxtReport ft;
         if (filetxt_sync(dir, "PolHook.dll", true, &ft)) {
             if (ft.written)
-                ok("Updated file.txt so PlayOnline's own check agrees with the shim");
+                ok("Updated file.txt so PlayOnline's own check agrees with HippaulMod");
             else if (ft.no_manifest)
                 info("No file.txt in this install -- nothing to keep in step.");
         } else {
@@ -733,9 +733,9 @@ int main(int argc, char** argv)
         DWORD ini_len = 0;
         const BYTE* tpl = resource(IDR_POLSHIM_INI, &ini_len);
         if (tpl && ini_len && write_all(ini, tpl, ini_len)) ok("Wrote polshim.ini");
-        else                                                warn("Could not write polshim.ini -- the shim will use its built-in defaults.");
+        else                                                warn("Could not write polshim.ini -- HippaulMod will use its built-in defaults.");
     } else {
-        info("polshim.ini already here -- keeping your settings (the shim adds any new keys itself).");
+        info("polshim.ini already here -- keeping your settings (HippaulMod adds any new keys itself).");
     }
     if (file_exists(ini)) {
         ini_set(ini, "redirect", "server", server_ip);
@@ -747,9 +747,9 @@ int main(int argc, char** argv)
     printf("\n");
     ok("DONE.");
     printf("  1) Start PlayOnline the NORMAL way (pol.exe / your usual shortcut).\n"
-           "     NOT a \"PlayOnline (shim)\" injector shortcut, if you have one -- the shim\n"
+           "     NOT a \"PlayOnline (shim)\" injector shortcut, if you have one -- HippaulMod\n"
            "     now loads itself, and both together would load it twice.\n"
-           "  2) The window title ends with \"[PoL-Shim v" POLSHIM_VERSION "]\" when it is active.\n"
+           "  2) The window title ends with \"[HippaulMod v" POLSHIM_VERSION "]\" when it is active.\n"
            "  3) IN-GAME SETTINGS:  press  Home   (or  Ctrl+Shift+S )\n"
            "     On a controller:   Back + Start  (View + Menu)\n"
            "     Windowed mode, cursor and audio fixes, controller mapping and the\n"

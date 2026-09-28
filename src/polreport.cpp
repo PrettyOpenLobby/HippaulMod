@@ -255,7 +255,7 @@ char* polreport_build(const char* desc, const char* category,
                 st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 
     char build[64];
-    _snprintf_s(build, sizeof(build), _TRUNCATE, "CrystalMod %s b%d",
+    _snprintf_s(build, sizeof(build), _TRUNCATE, "HippaulMod %s b%d",
                 POLSHIM_VERSION, POLSHIM_BUILD);
 
     char pid[32];
@@ -659,7 +659,7 @@ static bool ask(const Gathered* g, HWND owner)
         wc.cbSize = sizeof(wc); wc.lpfnWndProc = rpproc; wc.hInstance = inst;
         wc.hCursor = LoadCursor(NULL, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-        wc.lpszClassName = L"CrystalModReport";
+        wc.lpszClassName = L"HippaulModReport";
         if (!RegisterClassExW(&wc)) return false;
         reg = true;
     }
@@ -673,7 +673,7 @@ static bool ask(const Gathered* g, HWND owner)
     // "always on top" ones. The player saw nothing while the box sat there waiting
     // for input. A window manager keeps an owned (transient) window above its
     // owner even when the owner is fullscreen, and Windows does the same.
-    HWND h = CreateWindowExW(WS_EX_TOPMOST, L"CrystalModReport", L"Report a problem",
+    HWND h = CreateWindowExW(WS_EX_TOPMOST, L"HippaulModReport", L"Report a problem",
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
                              CW_USEDEFAULT, CW_USEDEFAULT,
                              r.right - r.left, r.bottom - r.top,
@@ -806,7 +806,7 @@ static void report_run(HWND owner)
         } else {
             MessageBoxW(IsWindow(owner) ? owner : NULL, no_server
                 ? L"The report could not be sent: no game server is set up in "
-                  L"CrystalMod, so there is nowhere to send it."
+                  L"HippaulMod, so there is nowhere to send it."
                 : L"The report could not be sent: the server did not accept it.\n\n"
                   L"Nothing was lost. Your log is still on this computer, in the "
                   L"PlayOnline folder (polshim.*.log).",

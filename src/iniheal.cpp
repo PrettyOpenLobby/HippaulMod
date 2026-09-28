@@ -194,7 +194,7 @@ static const ShimOption g_opts[] = {
   { L"dx", NULL, NULL, OPT_PACK, L"Let the Windows key and Alt+Tab out of a game",
     L"dx.key_escape=1:0|dx.dinput_winkey=1:0",
     true,
-    L"The games ask Windows to disable these keys. Ticked, the shim declines on your behalf, so you can always get back to the desktop." },
+    L"The games ask Windows to disable these keys. Ticked, HippaulMod declines on your behalf, so you can always get back to the desktop." },
   { L"dx",        L"key_escape",     L"1",    OPT_HIDDEN,
     L"Let Win / Alt+Tab past a title's keyboard hook", NULL },
   { L"dx",        L"dinput_winkey",  L"1",    OPT_HIDDEN,
@@ -380,7 +380,7 @@ static const ShimOption g_opts[] = {
   // above is the one a user should ever need.
   { L"dx",        L"wake_reset",     L"1",    OPT_BOOL,
     L"...by rebuilding the Direct3D device itself", NULL, true,
-    L"Off = detect and log only. On = the shim calls Reset when the title will "
+    L"Off = detect and log only. On = HippaulMod calls Reset when the title will "
     L"not. The runtime refuses a Reset that would lose the title's resources, "
     L"so the bad case is a logged refusal, not a broken game." },
   { L"dx",        L"wake_nudge",     L"1",    OPT_HIDDEN, L"Kick the game window on resume (restore + reframe)", NULL },
@@ -720,8 +720,8 @@ static const ShimOption g_opts[] = {
   // the installer, which is exactly how build 25 sat published with a known
   // hang-on-exit bug. Every refusal path is covered by the autoupdate test harness,
   // and the previous DLL is always kept beside the new one as PolHook.dll.b<NN>.old.
-  { L"autoupdate", L"enable",   L"1",     OPT_BOOL, L"Keep the shim up to date automatically", NULL, false,
-    L"The shim itself. Game updates are PlayOnline's own and are untouched." },
+  { L"autoupdate", L"enable",   L"1",     OPT_BOOL, L"Keep HippaulMod up to date automatically", NULL, false,
+    L"HippaulMod itself. Game updates are PlayOnline's own and are untouched." },
   { L"autoupdate", L"prompt",   L"title", OPT_ENUM, L"Tell me when it updates",
     L"title=In the title bar|dialog=Pop up a message|off=Don't tell me", false, NULL },
   { L"autoupdate", L"url",      L"",      OPT_TEXT, L"Update source (blank = this server)",  NULL },
@@ -788,7 +788,7 @@ static const ShimOption g_opts[] = {
   // ==========================================================================
 
   { L"polshim",   L"titletag",       L"1",    OPT_BOOL, L"Show the shim version in the title bar", NULL, false,
-    L"Adds the shim version after the window title." },
+    L"Adds the HippaulMod version after the window title." },
   // THE SERVER LABEL. On by default, and the default is the point: this exists
   // because on 2026-08-19 a laptop believed to be on PROD was talking to DEV,
   // nothing on screen said so, and the mistake was only found in the SERVER's
@@ -863,7 +863,7 @@ static const ShimOption g_opts[] = {
   { L"polshim",   L"trace",          L"0",    OPT_ENUM, L"Log detail",
     L"0=Off (decisions and errors)|1=What each layer did|2=+ per-message spies|3=+ image dumps and call sites",
     true,
-    L"Level 3 writes a dump of the running game's memory image next to the shim." },
+    L"Level 3 writes a dump of the running game's memory image next to pol.exe." },
 
   // --- DEVELOPER ROWS: drawn only with the box above ticked -----------------
   //
@@ -897,7 +897,7 @@ static const ShimOption g_opts[] = {
   // would be redundant -- it is read once at startup and never re-read, which
   // `shim_reload` cannot change.
   { L"polshim",   L"bypass",         L"0",    OPT_BOOL,
-    L"Disable the ENTIRE shim (takes effect next launch; untick here to restore)",
+    L"Disable ALL of HippaulMod (takes effect next launch; untick here to restore)",
     NULL, true },
   // The half-step bypass leaves out: keep the network routing, login and logging
   // that reach our server, but turn OFF everything that touches the GAME (all the
@@ -977,7 +977,7 @@ static const ShimOption g_opts[] = {
   // while the movie played (2026-08-26). The row now says where the REAL per-game
   // switches live, because for every title except FMO that is the right answer and
   // this one is the last resort.
-  { L"dx",        L"fmv_skip", L"4", OPT_ENUM, L"Skip the opening movie (shim-side, last resort)",
+  { L"dx",        L"fmv_skip", L"4", OPT_ENUM, L"Skip the opening movie (HippaulMod-side, last resort)",
     L"0=Play the movie|1=Trace only|2=Skip it|3=Skip (report failure)|4=Refuse the graph"
     L"|5=Build it but never play", true,
     L"Prefer each game's OWN switch, in \"Each game's own settings\" -- they work on "
@@ -1496,7 +1496,7 @@ int shim_reset_fixes(const wchar_t* ini, char* report, size_t cap)
         { L"dx",      L"d3d_fs_rescue",   L"1",
           L"Front Mission Online: rescue a failed fullscreen device to windowed" },
         { L"polshim", L"profile_cmdline", L"1",
-          L"Fantasy Earth: deliver SE's own -windowmode so it does not fight the shim" },
+          L"Fantasy Earth: deliver SE's own -windowmode so it does not fight HippaulMod" },
     };
     for (int i = 0; i < (int)_countof(k_launch); i++) {
         wchar_t cur[64];

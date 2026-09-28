@@ -36,7 +36,7 @@
 // PolHook.dll.sha256). An operator who DOES want to host their own build sets
 // [autoupdate] url=server (the old <server>/shim/dist layout) or a full URL.
 #ifndef POLSHIM_UPDATE_BASE
-#define POLSHIM_UPDATE_BASE "https://github.com/PrettyOpenLobby/CrystalMod/releases/latest/download"
+#define POLSHIM_UPDATE_BASE "https://github.com/PrettyOpenLobby/HippaulMod/releases/latest/download"
 #endif
 
 #ifndef POLSHIM_VERSION
@@ -1377,7 +1377,7 @@ int   inputmode_enabled();
 // default off. Launch-time (restart-bound); see g_restart_keys.
 void  shortcut_configure(const wchar_t* ini);
 
-// titletag.cpp -- append " [PoL-Shim vX.Y.Z]" to the Viewer window title so the
+// titletag.cpp -- append " [HippaulMod vX.Y.Z]" to the Viewer window title so the
 // running build is visible at a glance. [polshim] titletag=1 (default on).
 void  titletag_configure(const wchar_t* ini);
 void  titletag_start();

@@ -1888,7 +1888,7 @@ static void import_character_clicked(HWND h)
     if (!poltoken_session_hex(sid)) {
         MessageBoxW(h,
             L"Sign into PlayOnline first, then come back here.\n\n"
-            L"The shim learns your session id at sign-in, and the server uses "
+            L"HippaulMod learns your session id at sign-in, and the server uses "
             L"it to decide which account receives the character.",
             L"Import FFXI character", MB_OK | MB_ICONINFORMATION);
         return;
@@ -2198,7 +2198,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     if (warn) {
                         wchar_t w[700];
                         _snwprintf_s(w, _countof(w), _TRUNCATE, L"%hs\n\nOpen it now?", warn);
-                        if (MessageBoxW(h, w, L"PoL-Shim Settings",
+                        if (MessageBoxW(h, w, L"HippaulMod Settings",
                                         MB_OKCANCEL | MB_ICONINFORMATION) != IDOK)
                             return 0;
                     }
@@ -2209,7 +2209,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                      e == ERROR_FILE_NOT_FOUND
                                        ? L"That tool is not installed with this copy of the game."
                                        : L"Could not open it (error %lu).", e);
-                        MessageBoxW(h, w, L"PoL-Shim Settings", MB_OK | MB_ICONWARNING);
+                        MessageBoxW(h, w, L"HippaulMod Settings", MB_OK | MB_ICONWARNING);
                     }
                     return 0;
                 }
@@ -2516,7 +2516,7 @@ static void build_and_pump()
     RECT r = { 0, 0, cw, ch + LY_FILTERBAR };
     AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE);
     HWND h = CreateWindowExW(WS_EX_TOPMOST, L"PolShimSettings",
-                             L"PlayOnline Shim Settings  [v" _CRT_WIDE(POLSHIM_VERSION) L"]",
+                             L"HippaulMod Settings  [v" _CRT_WIDE(POLSHIM_VERSION) L"]",
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
                              CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
                              NULL, NULL, inst, NULL);

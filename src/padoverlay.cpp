@@ -574,7 +574,7 @@ void padoverlay_draw(void* surface, const void* dstrect)
     int have = padmap_live_buttons(btns, &nbtn, &src);
     if (!have) { nbtn = 0; memset(btns, 0, sizeof(btns)); }
 
-    line(&c, RGB(255, 255, 120), "POLSHIM CONTROLLER MAPPING");
+    line(&c, RGB(255, 255, 120), "HIPPAULMOD CONTROLLER MAPPING");
 
     char prod[128] = "";
     int ndev = padmap_device_seen(prod, sizeof(prod));

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install (or revert) the self-loading PoL-Shim as a PolHook.dll PROXY.
+  Install (or revert) the self-loading HippaulMod as a PolHook.dll PROXY.
 
 .DESCRIPTION
   pol.exe STATICALLY imports PolHook.dll (SE's small legacy mouse-hook DLL), so
@@ -218,12 +218,12 @@ Write-Host "Next:" -ForegroundColor Cyan
 Write-Host "  1) Launch PlayOnline the NORMAL way (pol.exe / standard shortcut)."
 Write-Host "     NOT the 'PlayOnline (shim)' injector shortcut -- the proxy self-loads;"
 Write-Host "     using both loads the shim twice."
-Write-Host "  2) The window title should end with '[PoL-Shim v0.1.0]' -- that confirms it loaded."
+Write-Host "  2) The window title should end with '[HippaulMod v...]' -- that confirms it loaded."
 Write-Host "  3) Change server at launch WITHOUT editing this file:"
 Write-Host "       env :  POLSHIM_SERVER=<ip>"
 Write-Host "              Steam Deck -> game Properties -> Launch Options:  POLSHIM_SERVER=<ip> %command%"
 Write-Host "       arg :  add  --polserver=<ip>  to the launch command"
 Write-Host "     (precedence: --polserver > POLSHIM_SERVER > [redirect] server= in the ini)"
 Write-Host "  4) Log to confirm: $InstallDir\polshim.<pid>.log"
-Write-Host "     look for the '[polshim] PoL-Shim v...' banner and a '[dns] REDIRECT ACTIVE' line."
+Write-Host "     look for the '[polshim] HippaulMod v...' banner and a '[dns] REDIRECT ACTIVE' line."
 Write-Host "  Revert anytime:  .\Install-PolHookProxy.ps1 -Revert" -ForegroundColor Cyan

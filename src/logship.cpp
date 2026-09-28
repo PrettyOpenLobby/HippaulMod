@@ -1,6 +1,6 @@
 // logship.cpp -- read this client's own shim log safely, for the bug report.
 //
-// SCOPE IN CRYSTALMOD. The development shim this came from could also POST a
+// SCOPE IN HIPPAULMOD. The development shim this came from could also POST a
 // log on its own (after a crash, or streamed live). None of that is here:
 // nothing in this file sends anything. It exists so the report key
 // (polreport.cpp) has ONE place for the three things that are expensive to get

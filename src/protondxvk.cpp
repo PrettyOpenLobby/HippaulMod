@@ -177,7 +177,7 @@ static bool write_all(const char* path, const char* data, DWORD len)
 }
 
 static const char* K_LINE =
-    "    \"PROTON_DXVK_D3D8\": \"1\",   # PoL-Shim: d3d8 -> DXVK (Vulkan)\n";
+    "    \"PROTON_DXVK_D3D8\": \"1\",   # HippaulMod: d3d8 -> DXVK (Vulkan)\n";
 
 // THE WHOLE FILE-EDITING DECISION, taking the directory as an ARGUMENT so the self-test
 // can drive it against a scratch tree. The equivalent logic in install.sh shipped two

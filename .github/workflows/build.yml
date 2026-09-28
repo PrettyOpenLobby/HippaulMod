@@ -49,13 +49,13 @@ jobs:
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
           }
           $sums | Out-File -Encoding ascii stage\SHA256SUMS
-          Compress-Archive -Path stage\* -DestinationPath CrystalMod.zip
+          Compress-Archive -Path stage\* -DestinationPath HippaulMod.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: crystalmod
+          name: hippaulmod
           path: |
             stage/
-            CrystalMod.zip
+            HippaulMod.zip
 
   release:
     needs: [hygiene, shim]
@@ -64,13 +64,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: crystalmod
+          name: hippaulmod
       - name: name the zip after the tag
-        run: mv CrystalMod.zip "CrystalMod-${GITHUB_REF_NAME}.zip"
+        run: mv HippaulMod.zip "HippaulMod-${GITHUB_REF_NAME}.zip"
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            CrystalMod-${{ github.ref_name }}.zip
+            HippaulMod-${{ github.ref_name }}.zip
             stage/PolShimSetup.exe
             stage/PolHook.dll
             stage/PolHook.dll.sha256

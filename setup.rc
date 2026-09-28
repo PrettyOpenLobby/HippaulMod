@@ -41,13 +41,13 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName",      "PoL-Shim"
-            VALUE "FileDescription",  "PoL-Shim setup for PlayOnline Viewer"
+            VALUE "CompanyName",      "HippaulMod"
+            VALUE "FileDescription",  "HippaulMod setup for PlayOnline Viewer"
             VALUE "FileVersion",      "0.1.0"
             VALUE "InternalName",     "PolShimSetup"
             VALUE "LegalCopyright",   "Free software. Not affiliated with SQUARE ENIX."
             VALUE "OriginalFilename", "PolShimSetup.exe"
-            VALUE "ProductName",      "PoL-Shim"
+            VALUE "ProductName",      "HippaulMod"
             VALUE "ProductVersion",   "0.1.0"
         END
     END

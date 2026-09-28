@@ -1873,7 +1873,7 @@ static void startup()
     // not there. That has now cost two full test cycles, each looking like "the
     // new hook produced no output" when the new hook was never loaded. With this,
     // one glance at the top of the log settles which build is actually running.
-    logf("[polshim] PoL-Shim v%s  build %s %s", POLSHIM_VERSION, __DATE__, __TIME__);
+    logf("[polshim] HippaulMod v%s  build %s %s", POLSHIM_VERSION, __DATE__, __TIME__);
     // This process's OWN command line. pol.exe's argv scan (pol.exe+0x14710) reads
     // "/game <token>" from here and copies the token into its shortcut buffer, so a
     // shortcut launched directly (or via a launcher wrapper) shows up on this line;
