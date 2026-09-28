@@ -6,12 +6,14 @@
 // module's first DllGetClassObject, which is post-unpack and pre-login.
 //
 // WHAT THIS FIXES -- (1) the pre-login "Check Files" list (sites A/B below), and
-// (2) the native sign-up wizard's hardcoded https: scheme (site C), so in-client
-// account registration works over plain HTTP with no certificate, and (3) a NULL
-// write in SE's FFXI Test Server case that crashes GM Call's request form (site
-// D, below the table's comment for it). Site C is the
-// in-memory equivalent of the on-disk sign-up scheme patch; both are idempotent,
-// so having one does not conflict with the other.
+// (2) a NULL write in SE's FFXI Test Server case that crashes GM Call's request
+// form (site D, below the table's comment for it).
+//
+// Site C, which rewrote the sign-up wizard's "https:%s%s" to http:, is gone:
+// the server now terminates the wizard's SSL 3.0 with a certificate chain the
+// stock cert.db trusts, so the wizard runs as SE shipped it. inject.cpp's
+// patch_signup_scheme still makes the same rewrite when [polshim]
+// signup_http=1, as a fallback.
 //
 // The enumerator walks the content table from data/doc/sqpolcts.bin (ids 1,2,3,4,
 // 5,6,7,10,11,12,13,14,15,999,1000..1005) and marks every candidate "rejected" via
@@ -70,23 +72,6 @@ static const BYTE A_WANT[] = { 0x83, 0x7D, 0x08, 0x04, 0x90, 0x90 };
 static const BYTE B_ORIG[] = { 0x85, 0xF6, 0x74, 0x03, 0x83, 0x26, 0x00 };
 static const BYTE B_WANT[] = { 0x83, 0x26, 0x00, 0x83, 0x23, 0x00, 0x90 };
 
-// site C: the native sign-up wizard's URL scheme. BuildSignupUrlAndOpen does
-// sprintf("https:%s%s", POL_UCS_URL, POL_UCS_CGI); that format string is a UNIQUE
-// UTF-16LE literal in .rdata at RVA 0x3CF920. Rewriting "https:%s%s\0" to
-// "http:%s%s\0\0" (one code unit shorter, tail padded with a NUL word, so the
-// 22-byte region and every later offset are unchanged) makes the wizard build an
-// http:// URL and fetch it over plain HTTP -- no certificate, no SSLv3, no trust
-// store. Pair with POL_UCS_URL=//ucs.pol.com:8080/pml-cgi-bin/ in env.dat so the
-// fetch lands on the plain ucscgi port (an implicit-port URL maps to band 51305,
-// which is TLS-only). This is the in-memory twin of the on-disk sign-up scheme patch:
-// same bytes, but applied at load so it needs no on-disk edit and no closed client.
-// Doing it here also dodges the DLL-is-locked-while-running problem the on-disk
-// tool hits. The byte-verify guard makes it fail safe on any other build.
-static const BYTE C_ORIG[] = { 0x68,0x00, 0x74,0x00, 0x74,0x00, 0x70,0x00, 0x73,0x00,
-                               0x3A,0x00, 0x25,0x00, 0x73,0x00, 0x25,0x00, 0x73,0x00, 0x00,0x00 };
-static const BYTE C_WANT[] = { 0x68,0x00, 0x74,0x00, 0x74,0x00, 0x70,0x00, 0x3A,0x00,
-                               0x25,0x00, 0x73,0x00, 0x25,0x00, 0x73,0x00, 0x00,0x00, 0x00,0x00 };
-
 // site D: the FFXI Test Server (id 15) accept tail, a crash in SE's code. The
 // GM Call request form builds its Service list by calling this same check with
 // every out-pointer NULL (app.dll+0x268230: push 0 x4). Each case guards its
@@ -111,7 +96,6 @@ static const BYTE D_WANT[] = { 0x85, 0xDB, 0x74, 0x03, 0x83, 0x23, 0x00,
 static Patch g_patches[] = {
     { "app.dll", 0x27A439, A_ORIG, A_WANT, sizeof(A_ORIG), 0, "filecheck_all", 0, 0 },
     { "app.dll", 0x27A536, B_ORIG, B_WANT, sizeof(B_ORIG), 1, "filecheck_fl",  0, 0 },
-    { "app.dll", 0x3CF920, C_ORIG, C_WANT, sizeof(C_ORIG), 0, "signup_http",   0, 0 },
     { "app.dll", 0x27A570, D_ORIG, D_WANT, sizeof(D_ORIG), 0, "gmform_ffxitest", 0, 0 },
 };
 
