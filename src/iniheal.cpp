@@ -562,6 +562,15 @@ static const ShimOption g_opts[] = {
   { L"dx",        L"cursor_lock",    L"1",    OPT_BOOL,
     L"Keep the mouse inside the game window", NULL, false,
     L"Alt+Tab or the Windows key lets it go.", true },
+  // THE HIDDEN POINTER (cursorlock.cpp). "-1" is the per-game default -- on for FMO,
+  // which does not use the Windows pointer, off for everything else -- so the row can be
+  // healed into [dx] without turning that default into one global value. Fantasy Earth
+  // draws its pointer THROUGH the Windows cursor, so "Every game" is a choice to make per
+  // game, not a default.
+  { L"dx",        L"cursor_hide",    L"-1",   OPT_ENUM,
+    L"Hide the mouse pointer over the game while it is held",
+    L"-1=Games that do not use it (Front Mission Online)|1=Yes|0=No", false,
+    L"Only while the mouse is held in the game window. Set it per game for Fantasy Earth.", true },
   // The FMV window. Both have run ON with no row since they were written, which
   // is how "the movie plays in a corner and the logo is drawn twice" stayed a
   // report with nothing in the ini to point at. The class list is HIDDEN -- it
