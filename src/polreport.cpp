@@ -412,6 +412,24 @@ static BOOL CALLBACK pick_proc(HWND h, LPARAM lp)
 
 static bool capture_png(const wchar_t* path, int* out_w, int* out_h)
 {
+    // THE GAME'S OWN FRAME FIRST. A screen copy is black under Wine whenever DXVK
+    // presents through Vulkan, which made the first Linux report's picture useless;
+    // the frame read back from the game's device is what the player saw.
+    if (path) {
+        int fw = 0, fh = 0;
+        unsigned char* frgb = NULL;
+        if (d3d8_capture_frame(1000, &fw, &fh, &frgb)) {
+            bool ok = write_png_rgb(path, fw, fh, frgb);
+            free(frgb);
+            if (ok) {
+                logf("[report] picture taken from the game's own frame");
+                if (out_w) *out_w = fw;
+                if (out_h) *out_h = fh;
+                return true;
+            }
+        }
+    }
+
     WinPick wp = { NULL, 0 };
     EnumWindows(pick_proc, (LPARAM)&wp);
     HWND h = wp.best;

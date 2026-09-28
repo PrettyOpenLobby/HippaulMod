@@ -1030,6 +1030,7 @@ void   ui_dpi_fit_end(HANDLE prev);
 void  polreport_configure(const wchar_t* ini);
 void  polreport_open();                   // gather, ask, send, on a thread of its own
 void  polreport_open_from(HWND owner);     // the same, from the settings window's button
+bool  d3d8_capture_frame(DWORD timeout_ms, int* w, int* h, unsigned char** rgb); // the game's last frame
 void  logship_live_start(void);             // [logship] live: start streaming if it is on and not expired
 void  logship_reload(const wchar_t* ini);   // live re-read from the settings dialog
 int   logship_live_minutes_left(void);      // >0 while streaming (the title bar says so)

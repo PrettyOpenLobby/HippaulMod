@@ -2566,6 +2566,7 @@ static bool                     g_pp_have     = false;
 static bool                     g_dev_vt_ok   = false;   // the vtable validated
 // Defined below hook_Present, which it installs; called from hook_CreateDevice.
 static void wake_arm_d3d8(void* dev, HWND wnd);
+static void tex_arm_device(void* dev);      // the texture-format record, beside hook_Present
 
 // --- per-device facts for the bug report (d3d8_diag_text) ------------------
 // Every d3d8 device in the process shares ONE vtable, so g_n_present counts the
@@ -3597,6 +3598,7 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
                          "Reset not hooked");
                 }
                 if (g_d3d_renderspy) install_renderspy(*ppDev);
+                tex_arm_device(*ppDev);
                 arm_hang_probe();
             }
         }
@@ -4010,9 +4012,294 @@ void tm_resv_diag_start(void)
     log_flush();
 }
 
+// --- texture formats: what the title asks for, and what the device answers ---
+//
+// A Linux player saw Fantasy Earth's continent map draw dark red and black, with
+// its field markers missing, while the untextured border lines drew correctly
+// (2026-09-28: Bottles, NVIDIA GTX 1050 Ti, DXVK). On the Deck the same map is
+// right. That is one texture format the title uses being mishandled somewhere
+// below it, and nothing in the log said which formats the title uses. So every
+// distinct format the title CHECKS (IDirect3D8::CheckDeviceFormat) and CREATES
+// (IDirect3DDevice8::CreateTexture) is logged once, with the answer, and the
+// table goes into the report's diag.txt. Read-only: nothing here changes a call.
+#define S_CheckDeviceFormat      10
+#define SD_GetBackBuffer         16
+#define SD_CreateTexture         20
+#define SD_CreateImageSurface    27
+#define SD_CopyRects             28
+
+typedef HRESULT (STDMETHODCALLTYPE *PFN_CheckDeviceFormat)(void*, UINT, DWORD, DWORD, DWORD,
+                                                          DWORD, DWORD);
+typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateTexture)(void*, UINT, UINT, UINT, DWORD, DWORD,
+                                                      DWORD, void**);
+static PFN_CheckDeviceFormat orig_CheckDeviceFormat = NULL;
+static PFN_CreateTexture     orig_CreateTexture     = NULL;
+
+struct TexFmt {
+    DWORD fmt, usage, pool;      // pool = 0xFFFFFFFF for a CheckDeviceFormat row
+    DWORD rtype;                 // CheckDeviceFormat's resource type; 3 = texture
+    HRESULT hr;
+    volatile LONG count;
+    UINT w, h;                   // the first texture created in this row
+};
+static TexFmt        g_texfmt[48];
+static volatile LONG g_texfmt_n = 0;
+static SRWLOCK       g_texfmt_lock = SRWLOCK_INIT;
+
+#ifndef MAKEFOURCC        // mmsystem.h's; this file does not include it
+#define MAKEFOURCC(a, b, c, d) ((DWORD)(BYTE)(a) | ((DWORD)(BYTE)(b) << 8) | \
+                                ((DWORD)(BYTE)(c) << 16) | ((DWORD)(BYTE)(d) << 24))
+#endif
+
+static const char* d3dfmt_name(DWORD f)
+{
+    switch (f) {
+    case 20: return "R8G8B8";   case 21: return "A8R8G8B8"; case 22: return "X8R8G8B8";
+    case 23: return "R5G6B5";   case 24: return "X1R5G5B5"; case 25: return "A1R5G5B5";
+    case 26: return "A4R4G4B4"; case 27: return "R3G3B2";   case 28: return "A8";
+    case 29: return "A8R3G3B2"; case 30: return "X4R4G4B4"; case 40: return "A8P8";
+    case 41: return "P8";       case 50: return "L8";       case 51: return "A8L8";
+    case 52: return "A4L4";     case 60: return "V8U8";     case 61: return "L6V5U5";
+    case 62: return "X8L8V8U8"; case 63: return "Q8W8V8U8"; case 64: return "V16U16";
+    case 67: return "A2W10V10U10"; case 70: return "D16_LOCKABLE"; case 71: return "D32";
+    case 73: return "D15S1";    case 75: return "D24S8";    case 77: return "D24X8";
+    case 79: return "D24X4S4";  case 80: return "D16";
+    }
+    switch (f) {                 // FOURCC formats
+    case MAKEFOURCC('D','X','T','1'): return "DXT1";
+    case MAKEFOURCC('D','X','T','2'): return "DXT2";
+    case MAKEFOURCC('D','X','T','3'): return "DXT3";
+    case MAKEFOURCC('D','X','T','4'): return "DXT4";
+    case MAKEFOURCC('D','X','T','5'): return "DXT5";
+    case MAKEFOURCC('U','Y','V','Y'): return "UYVY";
+    case MAKEFOURCC('Y','U','Y','2'): return "YUY2";
+    }
+    return NULL;
+}
+
+// Record one row; the first of its kind is also logged. Returns nothing: this
+// must never change what the caller gets back.
+static void texfmt_note(DWORD fmt, DWORD usage, DWORD pool, DWORD rtype, HRESULT hr,
+                        UINT w, UINT h)
+{
+    AcquireSRWLockExclusive(&g_texfmt_lock);
+    LONG n = g_texfmt_n;
+    for (LONG i = 0; i < n; i++) {
+        TexFmt* t = &g_texfmt[i];
+        if (t->fmt == fmt && t->usage == usage && t->pool == pool && t->rtype == rtype &&
+            t->hr == hr) {
+            t->count++;
+            ReleaseSRWLockExclusive(&g_texfmt_lock);
+            return;
+        }
+    }
+    bool added = false;
+    if (n < (LONG)(sizeof(g_texfmt) / sizeof(g_texfmt[0]))) {
+        TexFmt* t = &g_texfmt[n];
+        t->fmt = fmt; t->usage = usage; t->pool = pool; t->rtype = rtype; t->hr = hr;
+        t->count = 1; t->w = w; t->h = h;
+        g_texfmt_n = n + 1;
+        added = true;
+    }
+    ReleaseSRWLockExclusive(&g_texfmt_lock);
+    if (!added) return;
+    const char* nm = d3dfmt_name(fmt);
+    char num[16];
+    if (!nm) { _snprintf_s(num, sizeof(num), _TRUNCATE, "fmt %lu", (unsigned long)fmt); nm = num; }
+    if (pool == 0xFFFFFFFF)
+        logf("[tex] CheckDeviceFormat %s (usage 0x%lX, resource %lu) -> 0x%08lX%s", nm,
+             (unsigned long)usage, (unsigned long)rtype, (unsigned long)hr,
+             SUCCEEDED(hr) ? "" : "  <-- NOT SUPPORTED here");
+    else
+        logf("[tex] CreateTexture %s %ux%u (usage 0x%lX, pool %lu) -> 0x%08lX%s", nm, w, h,
+             (unsigned long)usage, (unsigned long)pool, (unsigned long)hr,
+             SUCCEEDED(hr) ? "" : "  <-- FAILED");
+}
+
+static HRESULT STDMETHODCALLTYPE hook_CheckDeviceFormat(void* self, UINT adapter, DWORD devtype,
+                                                        DWORD adapterfmt, DWORD usage,
+                                                        DWORD rtype, DWORD checkfmt)
+{
+    HRESULT hr = orig_CheckDeviceFormat(self, adapter, devtype, adapterfmt, usage, rtype,
+                                        checkfmt);
+    texfmt_note(checkfmt, usage, 0xFFFFFFFF, rtype, hr, 0, 0);
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE hook_CreateTexture(void* self, UINT w, UINT h, UINT levels,
+                                                    DWORD usage, DWORD fmt, DWORD pool,
+                                                    void** out)
+{
+    HRESULT hr = orig_CreateTexture(self, w, h, levels, usage, fmt, pool, out);
+    texfmt_note(fmt, usage, pool, 3, hr, w, h);
+    return hr;
+}
+
+// Once per vtable. Every d3d8 object in the process shares these vtables, so the
+// first device (and the first IDirect3D8) covers every title.
+static void tex_arm_d3d8(void** vt)
+{
+    if (orig_CheckDeviceFormat || !vt) return;
+    if (vt[S_CheckDeviceFormat] == (void*)hook_CheckDeviceFormat) return;
+    if (patch_slot(vt, S_CheckDeviceFormat, (void*)hook_CheckDeviceFormat,
+                   (void**)&orig_CheckDeviceFormat))
+        logf("[tex] CheckDeviceFormat hooked at slot %d -- each distinct format is logged "
+             "once", S_CheckDeviceFormat);
+    else
+        orig_CheckDeviceFormat = NULL;
+}
+
+static void tex_arm_device(void* dev)
+{
+    if (orig_CreateTexture || !dev) return;
+    void** vt = *(void***)dev;
+    if (vt[SD_CreateTexture] == (void*)hook_CreateTexture) return;
+    if (patch_slot(vt, SD_CreateTexture, (void*)hook_CreateTexture,
+                   (void**)&orig_CreateTexture))
+        logf("[tex] CreateTexture hooked at device slot %d -- each distinct format is "
+             "logged once", SD_CreateTexture);
+    else
+        orig_CreateTexture = NULL;
+}
+
+// --- the report's picture, taken from the game's own device -------------------
+//
+// The report's screenshot was a GDI copy of the screen, and under Wine that is
+// solid black whenever DXVK presents through Vulkan -- the first report from a
+// Linux player (2026-09-28) was a black rectangle. The frame the game just drew
+// is still in its back buffer when it calls Present, so the report asks, and the
+// next Present on the GAME's device copies it out before presenting. That call
+// is on the render thread, where the device may be used; the report thread only
+// waits for the result.
+struct D3D8SurfDesc { DWORD Format, Type, Usage, Pool; UINT Size; DWORD MultiSampleType;
+                      UINT Width, Height; };
+struct D3D8LockedRect { INT Pitch; void* pBits; };
+typedef HRESULT (STDMETHODCALLTYPE *PFN_GetBackBuffer)(void*, UINT, DWORD, void**);
+typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateImageSurface)(void*, UINT, UINT, DWORD, void**);
+typedef HRESULT (STDMETHODCALLTYPE *PFN_CopyRects)(void*, void*, const RECT*, UINT, void*,
+                                                  const POINT*);
+typedef HRESULT (STDMETHODCALLTYPE *PFN_SurfGetDesc)(void*, D3D8SurfDesc*);
+typedef HRESULT (STDMETHODCALLTYPE *PFN_SurfLock)(void*, D3D8LockedRect*, const RECT*, DWORD);
+typedef HRESULT (STDMETHODCALLTYPE *PFN_SurfUnlock)(void*);
+typedef ULONG   (STDMETHODCALLTYPE *PFN_Release)(void*);
+
+static volatile LONG g_cap_want = 0;
+static HANDLE        g_cap_done = NULL;
+static BYTE*         g_cap_rgb  = NULL;
+static int           g_cap_w = 0, g_cap_h = 0;
+static char          g_cap_why[96];
+
+static bool is_game_device(void* dev)
+{
+    if (!g_game_window) return false;
+    for (int i = 0; i < 6; i++)
+        if (g_diagdev[i].dev == dev) return g_diagdev[i].wnd == g_game_window;
+    return false;
+}
+
+static void cap_from_device(void* dev)
+{
+    void** vt = *(void***)dev;
+    void *bb = NULL, *img = NULL;
+    g_cap_why[0] = 0;
+    if (FAILED(((PFN_GetBackBuffer)vt[SD_GetBackBuffer])(dev, 0, 0, &bb)) || !bb) {
+        strcpy_s(g_cap_why, "GetBackBuffer failed");
+        return;
+    }
+    void** sv = *(void***)bb;
+    D3D8SurfDesc d; ZeroMemory(&d, sizeof(d));
+    if (FAILED(((PFN_SurfGetDesc)sv[8])(bb, &d)) || !d.Width || !d.Height ||
+        d.Width > 8192 || d.Height > 8192) {
+        strcpy_s(g_cap_why, "back buffer has no usable size");
+    } else if (d.MultiSampleType) {
+        strcpy_s(g_cap_why, "back buffer is multisampled");
+    } else if (d.Format < 21 || d.Format > 25) {
+        _snprintf_s(g_cap_why, sizeof(g_cap_why), _TRUNCATE,
+                    "back buffer format %lu is not one this reads", (unsigned long)d.Format);
+    } else if (FAILED(((PFN_CreateImageSurface)vt[SD_CreateImageSurface])(dev, d.Width,
+                     d.Height, d.Format, &img)) || !img) {
+        strcpy_s(g_cap_why, "CreateImageSurface failed");
+    } else if (FAILED(((PFN_CopyRects)vt[SD_CopyRects])(dev, bb, NULL, 0, img, NULL))) {
+        strcpy_s(g_cap_why, "CopyRects failed");
+    } else {
+        void** iv = *(void***)img;
+        D3D8LockedRect lr; ZeroMemory(&lr, sizeof(lr));
+        if (FAILED(((PFN_SurfLock)iv[9])(img, &lr, NULL, 0x10 /* READONLY */)) || !lr.pBits) {
+            strcpy_s(g_cap_why, "LockRect failed");
+        } else {
+            int w = (int)d.Width, h = (int)d.Height;
+            BYTE* rgb = (BYTE*)malloc((size_t)w * h * 3);
+            if (rgb) {
+                for (int y = 0; y < h; y++) {
+                    const BYTE* row = (const BYTE*)lr.pBits + (size_t)y * lr.Pitch;
+                    BYTE* o = rgb + (size_t)y * w * 3;
+                    for (int x = 0; x < w; x++, o += 3) {
+                        if (d.Format <= 22) {                  // A8R8G8B8 / X8R8G8B8: B,G,R,A
+                            const BYTE* p = row + x * 4;
+                            o[0] = p[2]; o[1] = p[1]; o[2] = p[0];
+                        } else {
+                            WORD v = ((const WORD*)row)[x];
+                            if (d.Format == 23) {              // R5G6B5
+                                o[0] = (BYTE)(((v >> 11) & 31) * 255 / 31);
+                                o[1] = (BYTE)(((v >> 5) & 63) * 255 / 63);
+                                o[2] = (BYTE)((v & 31) * 255 / 31);
+                            } else {                           // X1R5G5B5 / A1R5G5B5
+                                o[0] = (BYTE)(((v >> 10) & 31) * 255 / 31);
+                                o[1] = (BYTE)(((v >> 5) & 31) * 255 / 31);
+                                o[2] = (BYTE)((v & 31) * 255 / 31);
+                            }
+                        }
+                    }
+                }
+                g_cap_rgb = rgb; g_cap_w = w; g_cap_h = h;
+            } else {
+                strcpy_s(g_cap_why, "out of memory");
+            }
+            ((PFN_SurfUnlock)iv[10])(img);
+        }
+    }
+    if (img) ((PFN_Release)(*(void***)img)[2])(img);
+    ((PFN_Release)sv[2])(bb);
+}
+
+// The report thread's side. On success *rgb is malloc'd, top-down R,G,B; the caller
+// frees it. False (with the reason logged) when the game's device is not drawing
+// or the frame could not be read -- the caller then falls back to a screen copy.
+bool d3d8_capture_frame(DWORD timeout_ms, int* w, int* h, unsigned char** rgb)
+{
+    if (!orig_Present || !g_game_window) return false;
+    if (!g_cap_done) {
+        HANDLE e = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (InterlockedCompareExchangePointer(&g_cap_done, e, NULL) != NULL) CloseHandle(e);
+    }
+    ResetEvent(g_cap_done);
+    g_cap_rgb = NULL; g_cap_why[0] = 0;
+    InterlockedExchange(&g_cap_want, 1);
+    if (WaitForSingleObject(g_cap_done, timeout_ms) != WAIT_OBJECT_0) {
+        InterlockedExchange(&g_cap_want, 0);
+        logf("[report] the game drew no frame within %lu ms -- using a screen copy",
+             (unsigned long)timeout_ms);
+        return false;
+    }
+    if (!g_cap_rgb) {
+        logf("[report] could not read the game's frame (%s) -- using a screen copy",
+             g_cap_why[0] ? g_cap_why : "unknown");
+        return false;
+    }
+    *w = g_cap_w; *h = g_cap_h; *rgb = g_cap_rgb;
+    g_cap_rgb = NULL;
+    return true;
+}
+
 static HRESULT STDMETHODCALLTYPE hook_Present(void* self, const void* a, const void* b,
                                               HWND c, const void* d)
 {
+    // Before presenting: with a DISCARD swap chain the back buffer is only
+    // defined until Present returns.
+    if (g_cap_want && is_game_device(self) && InterlockedExchange(&g_cap_want, 0)) {
+        cap_from_device(self);
+        SetEvent(g_cap_done);
+    }
     tm_unstick_se();
     tm_index_diag();
     tm_resv_diag_start();
@@ -4283,6 +4570,7 @@ static void* WINAPI hook_Direct3DCreate8(UINT sdk)
         logf("[d3d] CreateDevice %s at vtable slot %d (orig=%p) -- covers "
              "TM.dll, FFXiMain.dll and FE_Client.dll, which share this vtable",
              rearm ? "RE-ARMED" : "hooked", S_CreateDevice, orig_CreateDevice);
+        tex_arm_d3d8(vt);
     } else {
         // orig_CreateDevice is untouched on failure, so a re-arm that loses the
         // race keeps the original it already had rather than being disarmed.
@@ -6407,6 +6695,27 @@ int d3d8_diag_text(char* out, size_t cch, DWORD sample_ms)
             DAPP("verdict: some device is presenting, but none is on the game window -- "
                  "this cannot say whether the title is\n");
     }
+
+    // Every texture format asked about or created in this process, with the
+    // answer (see texfmt_note). Friend List and Viewer rows are in here too.
+    AcquireSRWLockShared(&g_texfmt_lock);
+    LONG tn = g_texfmt_n;
+    DAPP("texture_formats: %ld distinct (CheckDeviceFormat = asked, CreateTexture = made)\n", tn);
+    for (LONG i = 0; i < tn; i++) {
+        const TexFmt* t = &g_texfmt[i];
+        const char* nm = d3dfmt_name(t->fmt);
+        char num[16];
+        if (!nm) { _snprintf_s(num, sizeof(num), _TRUNCATE, "fmt %lu", (unsigned long)t->fmt); nm = num; }
+        if (t->pool == 0xFFFFFFFF)
+            DAPP("  asked %-10s usage=0x%lX resource=%lu -> 0x%08lX x%ld%s\n", nm,
+                 (unsigned long)t->usage, (unsigned long)t->rtype, (unsigned long)t->hr,
+                 t->count, SUCCEEDED(t->hr) ? "" : "  NOT SUPPORTED");
+        else
+            DAPP("  made  %-10s usage=0x%lX pool=%lu first=%ux%u -> 0x%08lX x%ld%s\n", nm,
+                 (unsigned long)t->usage, (unsigned long)t->pool, t->w, t->h,
+                 (unsigned long)t->hr, t->count, SUCCEEDED(t->hr) ? "" : "  FAILED");
+    }
+    ReleaseSRWLockShared(&g_texfmt_lock);
 #undef DAPP
     return (int)n;
 }
