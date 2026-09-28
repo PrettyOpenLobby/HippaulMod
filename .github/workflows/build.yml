@@ -29,6 +29,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: take the release version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          "POLSHIM_RELEASE_VERSION=$($env:GITHUB_REF_NAME.Substring(1))" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: build PolHook.dll and PolShimSetup.exe (MSVC x86)
         shell: cmd
         run: build.bat

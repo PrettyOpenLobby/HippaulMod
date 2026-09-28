@@ -39,6 +39,11 @@ rem dxhook.cpp adds the DirectDraw/DirectSound layer; dxguid.lib supplies
 rem IID_IDirectDraw7 / IID_IDirectSound8 (referenced, never called).
 set "SHIMSRC=..\src\inject.cpp ..\src\proxy.cpp ..\src\log.cpp ..\src\patches.cpp ..\src\fepatch.cpp ..\src\tmpathfix.cpp ..\src\authkey.cpp ..\src\dxhook.cpp ..\src\mailstore.cpp ..\src\comtrace.cpp ..\src\gamestart.cpp ..\src\d3d8hook.cpp ..\src\d3d9hook.cpp ..\src\vidfit.cpp ..\src\fmvskip.cpp ..\src\wndguard.cpp ..\src\vmrfix.cpp ..\src\dinputhook.cpp ..\src\hookspy.cpp ..\src\inputgate.cpp ..\src\cursorlock.cpp ..\src\secondlaunch.cpp ..\src\keystate.cpp ..\src\exitprompt.cpp ..\src\netredir.cpp ..\src\profiles.cpp ..\src\polfetch.cpp ..\src\fmokey.cpp ..\src\fmoime.cpp ..\src\msgxlate.cpp ..\src\uitrace.cpp ..\src\regredir.cpp ..\src\regfix.cpp ..\src\fmoiid.cpp ..\src\polfiletxt.cpp ..\src\iniheal.cpp ..\src\polsettings.cpp ..\src\gamecfg.cpp ..\src\logprune.cpp ..\src\patchver.cpp ..\src\inputmode.cpp ..\src\shortcut.cpp ..\src\padmap.cpp ..\src\padoverlay.cpp ..\src\titletag.cpp ..\src\maskguard.cpp ..\src\protondxvk.cpp ..\src\sessionwatch.cpp ..\src\autoupdate.cpp ..\src\poltoken.cpp ..\src\ffxiplug.cpp ..\src\ffxicfg.cpp ..\src\crashlog.cpp ..\src\reslock.cpp ..\src\flwindow.cpp ..\src\wakerecover.cpp ..\src\fecfg.cpp ..\src\logship.cpp ..\src\polreport.cpp ..\src\sysdiag.cpp"
 set "SHIMLIBS=kernel32.lib user32.lib advapi32.lib ole32.lib dxguid.lib strmiids.lib ws2_32.lib shlwapi.lib gdi32.lib shell32.lib crypt32.lib wininet.lib bcrypt.lib comctl32.lib comdlg32.lib version.lib"
+rem RELEASE VERSION. The release workflow sets POLSHIM_RELEASE_VERSION from the tag
+rem (v0.1.9 -> 0.1.9), so the title bar names the same version as the Releases page.
+rem Unset, as in any local build, the source's own version and the build number show.
+set "RELDEFS="
+if defined POLSHIM_RELEASE_VERSION set "RELDEFS=/DPOLSHIM_VERSION=\"%POLSHIM_RELEASE_VERSION%\" /DPOLSHIM_RELEASE=1"
 
 rem PolHook.rc replicates the original PolHook.dll VS_VERSION_INFO: pol.exe
 rem version-checks its DLLs, and a proxy with no version resource fails that check.
@@ -46,7 +51,7 @@ rem The forwarders name PolHook_orig.dll but do NOT need it present to LINK (a
 rem forwarder is a string resolved at load time), so this builds standalone.
 rc /nologo /fo PolHook.res ..\PolHook.rc
 if errorlevel 1 ( popd & echo [!] PolHook.rc compile failed & exit /b 1 )
-cl /nologo /LD /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS ^
+cl /nologo /LD /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS %RELDEFS% ^
    %SHIMSRC% PolHook.res /Fe:PolHook.dll ^
    /link /DEF:..\PolHook.def %SHIMLIBS%
 
@@ -61,7 +66,7 @@ rem against its payload. The manifest is requireAdministrator: the swap writes i
 rem Program Files. /I ..\src lets rc find setup.manifest and buildnum.h.
 rc /nologo /I ..\src /fo setup.res ..\setup.rc
 if errorlevel 1 ( popd & echo [!] setup.rc compile failed & exit /b 1 )
-cl /nologo /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS ^
+cl /nologo /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS %RELDEFS% ^
    ..\src\setup.cpp ..\src\polfiletxt.cpp setup.res /Fe:PolShimSetup.exe ^
    /link kernel32.lib user32.lib advapi32.lib wininet.lib bcrypt.lib /MANIFEST:NO
 

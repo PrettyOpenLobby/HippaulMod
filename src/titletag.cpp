@@ -26,14 +26,19 @@ static char   g_tag[64]  = "";        // " [HippaulMod vX.Y.Z]" (ASCII; widened 
 static HANDLE g_thread   = NULL;
 static volatile LONG g_stop = 0;
 
+// A RELEASE build (CI, from a vX.Y.Z tag -- see build.bat) shows only that version,
+// the same one the Releases page names, so a player can check "am I on the latest?"
+// at a glance. Any other build carries the BUILD number too: its version string only
+// moves on features, so it cannot answer "did my update actually land?".
 static void build_tag()
 {
-    // Carry the BUILD number too: the version string only moves on features, so it
-    // cannot answer "did my update actually land?" -- which is the question the tag is
-    // there to answer in the first place.
-    if (!g_tag[0])
-        _snprintf_s(g_tag, sizeof(g_tag), _TRUNCATE, " [HippaulMod v%s b%d]",
-                    POLSHIM_VERSION, POLSHIM_BUILD);
+    if (g_tag[0]) return;
+#ifdef POLSHIM_RELEASE
+    _snprintf_s(g_tag, sizeof(g_tag), _TRUNCATE, " [HippaulMod v%s]", POLSHIM_VERSION);
+#else
+    _snprintf_s(g_tag, sizeof(g_tag), _TRUNCATE, " [HippaulMod v%s b%d]",
+                POLSHIM_VERSION, POLSHIM_BUILD);
+#endif
 }
 
 void titletag_configure(const wchar_t* ini)
@@ -253,6 +258,15 @@ static void desired_tag(wchar_t* out, size_t cch)
         _snwprintf_s(srv, _countof(srv), _TRUNCATE, L" | %s", g_server);
 
     int pend = autoupdate_pending_build();
+#ifdef POLSHIM_RELEASE
+    // The staged DLL's version is not known here (only its build number), so the
+    // notice says an update is waiting rather than naming it.
+    if (pend != 0)
+        _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod v%S -- update ready: RESTART%s]",
+                     POLSHIM_VERSION, srv);
+    else
+        _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod v%S%s]", POLSHIM_VERSION, srv);
+#else
     if (pend > 0)
         _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod v%S b%d -> b%d: RESTART to apply%s]",
                      POLSHIM_VERSION, POLSHIM_BUILD, pend, srv);
@@ -262,6 +276,7 @@ static void desired_tag(wchar_t* out, size_t cch)
     else
         _snwprintf_s(out, cch, _TRUNCATE, L" [HippaulMod v%S b%d%s]",
                      POLSHIM_VERSION, POLSHIM_BUILD, srv);
+#endif
 }
 
 // Our tag in a caption. Builds before the HippaulMod rename tagged " [PoL-Shim ",
