@@ -4132,6 +4132,30 @@ static HRESULT STDMETHODCALLTYPE hook_CreateTexture(void* self, UINT w, UINT h, 
 {
     HRESULT hr = orig_CreateTexture(self, w, h, levels, usage, fmt, pool, out);
     texfmt_note(fmt, usage, pool, 3, hr, w, h);
+
+    // DXT SIZES THAT ARE NOT A MULTIPLE OF 4. Windows' Direct3D 8 creates them; some
+    // DXVK builds refuse them with D3DERR_INVALIDCALL. Fantasy Earth's continent map
+    // is a 391x395 DXT1 and its field markers a 42x160 DXT3, so on such a setup the
+    // map drew as bare border lines on dark red with no markers (Bottles + DXVK,
+    // 2026-09-28; Proton 11's newer DXVK takes them, which is why the Deck was fine).
+    // Retry ONCE, only after that refusal, rounded up to whole 4x4 blocks: DXT data
+    // is stored per block, and 392x396 has exactly the block count of 391x395, so
+    // what the game uploads lands where it expects. The only visible difference is
+    // a sub-pixel stretch at the right and bottom edge.
+    const bool dxt = fmt == MAKEFOURCC('D','X','T','1') || fmt == MAKEFOURCC('D','X','T','2') ||
+                     fmt == MAKEFOURCC('D','X','T','3') || fmt == MAKEFOURCC('D','X','T','4') ||
+                     fmt == MAKEFOURCC('D','X','T','5');
+    if (hr == (HRESULT)0x8876086C && dxt && ((w & 3) || (h & 3))) {
+        UINT w4 = (w + 3) & ~3u, h4 = (h + 3) & ~3u;
+        HRESULT hr2 = orig_CreateTexture(self, w4, h4, levels, usage, fmt, pool, out);
+        texfmt_note(fmt, usage, pool, 3, hr2, w4, h4);
+        static volatile LONG said = 0;
+        if (InterlockedIncrement(&said) <= 8)
+            logf("[tex] %s %ux%u was refused by this driver (Windows accepts it) -- made "
+                 "it %ux%u instead, the same 4x4 blocks -> 0x%08lX", d3dfmt_name(fmt), w, h,
+                 w4, h4, (unsigned long)hr2);
+        if (SUCCEEDED(hr2)) hr = hr2;
+    }
     return hr;
 }
 
