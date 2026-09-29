@@ -6,15 +6,25 @@
 // module's first DllGetClassObject, which is post-unpack and pre-login.
 //
 // WHAT THIS FIXES -- (1) the pre-login "Check Files" list (sites A/B below), and
-// (2) a NULL write in SE's FFXI Test Server case that crashes GM Call's request
-// form (site D, below the table's comment for it), and (3) the chat zone list
-// hiding JongHoLow, FMO, DoC and Fantasy Earth (sites E/F).
+// (2) the chat zone list hiding JongHoLow, FMO, DoC and Fantasy Earth (sites E/F).
 //
 // Site C, which rewrote the sign-up wizard's "https:%s%s" to http:, is gone:
 // the server now terminates the wizard's SSL 3.0 with a certificate chain the
 // stock cert.db trusts, so the wizard runs as SE shipped it. inject.cpp's
 // patch_signup_scheme still makes the same rewrite when [polshim]
 // signup_http=1, as a fallback.
+//
+// Site D is gone too: it rewrote 0x27A570-0x27A57B to guard the FFXI Test Server
+// id-15 case's `and [ebx],0` (a NULL write that crashes GM Call's request form),
+// and its rewrite included `EB BD` at 0x27A577 to reroute the tail. But 0x27A577
+// is NOT private to id 15 -- it is a shared jump target: TM (id 2) accept ends
+// with `jmp 0x27A577` at 0x27A607, and FFXI (id 1) reaches the same shared tail
+// via 0x27A62D -> 0x27A649 (`jmp 0x27A5ED`), which falls into the same accept
+// tail at 0x27A5F8 ending in `jmp 0x27A577`. Rewriting 0x27A577 broke the
+// `and [ebx],0` that clears the reject flag on both paths, so FFXI and TM both
+// showed "Unable to start ... because the beta test is installed." Fixing GM
+// Call's form crash the right way needs a change at the CALLER (app.dll+0x268230,
+// which pushes 4 NULLs), not the shared tail. Do not restore site D as-is.
 //
 // The enumerator walks the content table from data/doc/sqpolcts.bin (ids 1,2,3,4,
 // 5,6,7,10,11,12,13,14,15,999,1000..1005) and marks every candidate "rejected" via
@@ -73,27 +83,6 @@ static const BYTE A_WANT[] = { 0x83, 0x7D, 0x08, 0x04, 0x90, 0x90 };
 static const BYTE B_ORIG[] = { 0x85, 0xF6, 0x74, 0x03, 0x83, 0x26, 0x00 };
 static const BYTE B_WANT[] = { 0x83, 0x26, 0x00, 0x83, 0x23, 0x00, 0x90 };
 
-// site D: the FFXI Test Server (id 15) accept tail, a crash in SE's code. The
-// GM Call request form builds its Service list by calling this same check with
-// every out-pointer NULL (app.dll+0x268230: push 0 x4). Each case guards its
-// writes except this one:
-//   85 F6 / 74 03 / 83 26 00   test esi; je; and dword [esi],0
-//   83 23 00                   and dword [ebx],0        <- ebx NULL: AV
-//   EB C1                      jmp mov bl,1 (+0x27a53d)
-// so with the Test Server installed, pressing Submit on GM Call kills the
-// Viewer (seen 2026-09-28: WRITE to 00000000 at app.dll+0x27A577). The rewrite
-// guards the [ebx] write and then jumps to Navigator's tail at +0x27a536, which
-// is exactly `test esi; je; and [esi],0` falling into `mov bl,1` -- so the
-// result is the original code with both writes guarded, in the same 12 bytes.
-//   85 DB / 74 03 / 83 23 00   test ebx; je; and dword [ebx],0
-//   EB BD / 90 90 90           jmp +0x27a536; padding
-// It depends on +0x27a536 being SE's bytes, so it is skipped when site B (which
-// rewrites them unguarded) is enabled.
-static const BYTE D_ORIG[] = { 0x85, 0xF6, 0x74, 0x03, 0x83, 0x26, 0x00,
-                               0x83, 0x23, 0x00, 0xEB, 0xC1 };
-static const BYTE D_WANT[] = { 0x85, 0xDB, 0x74, 0x03, 0x83, 0x23, 0x00,
-                               0xEB, 0xBD, 0x90, 0x90, 0x90 };
-
 // sites E/F: the chat zone list. data/db/c_chan.pfb defines the same zones in
 // every region -- rows 1..8 are 1100 PlayOnline, 1101 Games, 1102 FFXI, 1103
 // Tetra Master, 1104 JongHoLow, 1105 FMO, 1106 DoC, 1107 Fantasy Earth -- and
@@ -114,7 +103,6 @@ static const BYTE F_WANT[] = { 0x83, 0xFE, 0x05, 0xEB, 0x05 };
 static Patch g_patches[] = {
     { "app.dll", 0x27A439, A_ORIG, A_WANT, sizeof(A_ORIG), 0, "filecheck_all", 0, 0 },
     { "app.dll", 0x27A536, B_ORIG, B_WANT, sizeof(B_ORIG), 1, "filecheck_fl",  0, 0 },
-    { "app.dll", 0x27A570, D_ORIG, D_WANT, sizeof(D_ORIG), 0, "gmform_ffxitest", 0, 0 },
     { "app.dll", 0x0A12FC, E_ORIG, E_WANT, sizeof(E_ORIG), 0, "chatzones_jp",  0, 0 },
     { "app.dll", 0x0A132C, F_ORIG, F_WANT, sizeof(F_ORIG), 0, "chatzones_all", 0, 0 },
 };
@@ -139,11 +127,6 @@ void patches_apply_module(void* module_base, const char* module)
         if (_stricmp(p->module, module) != 0) continue;
         if (p->optional && !g_optional) {
             logf("[patch] %s: skipped (optional; set patches_optional=1)", p->name);
-            continue;
-        }
-        if (p->want == D_WANT && g_optional) {
-            logf("[patch] %s: skipped (it jumps into site B's bytes, which "
-                 "patches_optional=1 rewrites)", p->name);
             continue;
         }
         p->addr = base + p->rva;
