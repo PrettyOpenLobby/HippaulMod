@@ -7,7 +7,8 @@
 //
 // WHAT THIS FIXES -- (1) the pre-login "Check Files" list (sites A/B below), and
 // (2) a NULL write in SE's FFXI Test Server case that crashes GM Call's request
-// form (site D, below the table's comment for it).
+// form (site D, below the table's comment for it), and (3) the chat zone list
+// hiding JongHoLow, FMO, DoC and Fantasy Earth (sites E/F).
 //
 // Site C, which rewrote the sign-up wizard's "https:%s%s" to http:, is gone:
 // the server now terminates the wizard's SSL 3.0 with a certificate chain the
@@ -93,10 +94,29 @@ static const BYTE D_ORIG[] = { 0x85, 0xF6, 0x74, 0x03, 0x83, 0x26, 0x00,
 static const BYTE D_WANT[] = { 0x85, 0xDB, 0x74, 0x03, 0x83, 0x23, 0x00,
                                0xEB, 0xBD, 0x90, 0x90, 0x90 };
 
+// sites E/F: the chat zone list. data/db/c_chan.pfb defines the same zones in
+// every region -- rows 1..8 are 1100 PlayOnline, 1101 Games, 1102 FFXI, 1103
+// Tetra Master, 1104 JongHoLow, 1105 FMO, 1106 DoC, 1107 Fantasy Earth -- and
+// the loop at app.dll+0xA12BD that picks the VISIBLE rows skips some by index:
+//   JP Viewer        skip rows 6..8    (cmp esi,6 / jl / cmp esi,8 / jle skip)
+//   any other lang   skip rows 5..8    (cmp esi,5 / ...), so JongHoLow too
+// The flag comes from polcore (CFT +0xF18), not the server; the 0x03EA zone
+// reply only fills counts into rows already shown, so no server answer can
+// list a hidden zone. Turning each `jl` into `jmp` pushes every row. The
+// skin atlas chat_category0 already carries the mahjong-tile, FM, DC and FE
+// icons for these rows.
+//   83 FE 0N 7C 05   cmp esi,N; jl push   ->   83 FE 0N EB 05   cmp esi,N; jmp push
+static const BYTE E_ORIG[] = { 0x83, 0xFE, 0x06, 0x7C, 0x05 };
+static const BYTE E_WANT[] = { 0x83, 0xFE, 0x06, 0xEB, 0x05 };
+static const BYTE F_ORIG[] = { 0x83, 0xFE, 0x05, 0x7C, 0x05 };
+static const BYTE F_WANT[] = { 0x83, 0xFE, 0x05, 0xEB, 0x05 };
+
 static Patch g_patches[] = {
     { "app.dll", 0x27A439, A_ORIG, A_WANT, sizeof(A_ORIG), 0, "filecheck_all", 0, 0 },
     { "app.dll", 0x27A536, B_ORIG, B_WANT, sizeof(B_ORIG), 1, "filecheck_fl",  0, 0 },
     { "app.dll", 0x27A570, D_ORIG, D_WANT, sizeof(D_ORIG), 0, "gmform_ffxitest", 0, 0 },
+    { "app.dll", 0x0A12FC, E_ORIG, E_WANT, sizeof(E_ORIG), 0, "chatzones_jp",  0, 0 },
+    { "app.dll", 0x0A132C, F_ORIG, F_WANT, sizeof(F_ORIG), 0, "chatzones_all", 0, 0 },
 };
 
 static int g_enabled  = 0;   // [polshim] patches=
