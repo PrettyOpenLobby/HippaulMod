@@ -1321,6 +1321,16 @@ int   exitprompt_selftest(void);
 // are named `reg:<key path suffix>`, e.g. [reg:SquareEnix\FinalFantasyXI].
 // Nothing on the machine is modified and deleting the section undoes it.
 void  regserve_configure(const wchar_t* ini);
+void  ffxi3d_reload(const wchar_t* ini);     // [ffxi] stereo3d -> answer FFXI's 0030 (3D LCD Mode) with 1
+int   ffxi3d_selftest(void);
+int   ffxi3d_enabled(void);
+// ffxi3dview.cpp -- how the 3D image is presented (layout, eye swap, depth)
+void  ffxi3dview_reload(const wchar_t* ini);
+void  ffxi3dview_on_module(void* base);
+int   ffxi3dview_selftest(void);
+// FFXiMain code search, shared from ffxicfg.cpp (Ashita's ?? pattern notation)
+const unsigned char* pol_pattern_find(const unsigned char* base, size_t size, const char* pat);
+bool  pol_module_range(const char* name, const unsigned char** base, size_t* size);
 int   regserve_count(void);
 void  regserve_summary(void);
 int   regserve_selftest(void);

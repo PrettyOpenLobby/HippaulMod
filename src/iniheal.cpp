@@ -425,6 +425,23 @@ static const ShimOption g_opts[] = {
   { L"ffxi",      L"addons",         L"auto", OPT_ENUM, L"Stand aside when Ashita or Windower is running",
     L"auto=When one is running|on=Always|off=Never", false,
     L"Lets the add-on take over the picture and mouse. Does not start it." },
+  // FFXI's own hidden "3D LCD Mode" (registry 0030), answered from the shim rather
+  // than written -- see the ffxi3d block in regredir.cpp for the decode. OFF by
+  // default and NOT seen on a screen yet.
+  { L"ffxi",      L"stereo3d",       L"0",    OPT_BOOL, L"3D display mode", NULL, false,
+    L"Applies the next time FFXI starts." },
+  // How the two eye images reach the screen (ffxi3dview.cpp). Side by side is the
+  // game's own output with the old panel's flickering sync strip removed; the
+  // others are drawn by the shim from the game's two eye images. All three rows
+  // apply live on Save. "original" (the untouched 2003 output) is accepted in the
+  // ini but not offered, because the strip makes it unusable on today's screens.
+  { L"ffxi",      L"stereo3d_layout", L"sbs", OPT_ENUM, L"3D picture layout",
+    L"sbs=Side by side (3D TVs)|tab=Top and bottom|rows=Alternating lines (passive 3D monitors)|anaglyph=Red and cyan glasses",
+    false, L"Match the 3D format your screen expects." },
+  { L"ffxi",      L"stereo3d_swap",  L"0",    OPT_BOOL, L"Swap left and right eyes", NULL, false,
+    L"Try this if the 3D looks inside out." },
+  { L"ffxi",      L"stereo3d_depth", L"normal", OPT_ENUM, L"3D depth",
+    L"low=Low|normal=Normal|high=High", false, NULL },
 
   // NO [ffxi] trace row: it defaults from trace_at(2), and healing it in as "0" writes
   // an explicit override that permanently defeats [polshim] trace. See the rev-5

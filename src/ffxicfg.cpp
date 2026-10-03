@@ -216,6 +216,16 @@ static bool fcfg_module_range(const char* name, const unsigned char** base, size
     return true;
 }
 
+// Shared with ffxi3dview.cpp, which finds FFXiMain code the same way.
+const unsigned char* pol_pattern_find(const unsigned char* base, size_t size, const char* pat)
+{
+    return fcfg_find(base, size, pat);
+}
+bool pol_module_range(const char* name, const unsigned char** base, size_t* size)
+{
+    return fcfg_module_range(name, base, size);
+}
+
 // ---------------------------------------------------------------------------
 // the patterns, verbatim from Ashita's addons/config/config.lua
 // ---------------------------------------------------------------------------

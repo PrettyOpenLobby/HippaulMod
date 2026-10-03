@@ -1549,6 +1549,7 @@ static void handle_module(HMODULE mod)
     // moment FFXI's settings table becomes reachable, and that table is the
     // only place the 0000..0045 registry names are written down.
     ffxicfg_on_module((void*)mod);
+    ffxi3dview_on_module((void*)mod);
 }
 
 void wndguard_module_unloading(HMODULE base);   // wndguard.cpp
@@ -2020,6 +2021,7 @@ static void startup()
     poltoken_configure(ini);   // [poltoken]; stamps the POL session id into FFXI's lobby packets
     ffxiplug_configure(ini);    // reads [ffxi]; Ashita/Windower coexistence + the plugin list
     ffxicfg_configure(ini);     // reads [ffxi] cfgdump; the FFXI settings-table dump (READ-ONLY)
+    ffxi3dview_reload(ini);     // [ffxi] stereo3d_layout/_swap/_depth; the hooks go in when FFXiMain loads
     inputgate_configure(ini);   // reads [dx] mouse_focus_gate; withholds the mouse while another app is in front
     cursorlock_configure(ini);  // reads [dx] cursor_lock; holds the pointer in the game window while it is in front
     keystate_init(ini);         // resolves GetAsyncKeyState/GetKeyState/GetKeyboardState for the [dx] key_focus_gate swap below
@@ -2176,6 +2178,8 @@ void shim_reload(const wchar_t* ini)
     padoverlay_reload(ini);
     titletag_reload(ini);
     ffxiplug_reload(ini);
+    ffxi3d_reload(ini);
+    ffxi3dview_reload(ini);
     crashlog_reload(ini);
     logship_reload(ini);        // the live log's tick applies on Save
     polreport_configure(ini);

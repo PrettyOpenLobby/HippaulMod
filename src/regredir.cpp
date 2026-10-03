@@ -835,6 +835,7 @@ void regserve_configure(const wchar_t* ini)
 {
     g_rs_n = 0;
     g_rs_trace = GetPrivateProfileIntW(L"reg", L"trace", 0, ini);
+    ffxi3d_reload(ini);     // here so it is known before installdir_resolve arms the hooks
 
     // Section NAMES first: this is the only way to find sections whose names are
     // not known ahead of time, and the whole design here is that the user names
@@ -999,6 +1000,102 @@ int regserve_selftest(void)
     return fail;
 }
 
+// ============================================================================
+// ffxi3d -- FFXI's hidden "3D LCD Mode", switched on by answering its read of 0030
+//
+// Measured 2026-10-03 from the binaries, not guessed:
+//
+//   * FINAL FANTASY XI Config.exe (ToolsUS, v5.0) still carries the whole feature:
+//     checkbox control 1040 "Enable 3D LCD Mode" on the old Screen Size page
+//     (dialog 131), the health-warning agreement, and "Please change the Overlay
+//     Graphics Resolution setting to 1024 x 768". Its %04d registry table at
+//     0x6f7904 maps that checkbox's global (0x706e28) to value "0030", default 0.
+//     SE hid it by compiling the "is 3D supported" check (0x4145f0) to
+//     `xor al,al; ret` -- OnInitDialog then forces 0030 to 0 and greys the box.
+//   * FFXiMain.dll (unpacked in memory) has the same table at 0x103507ec; 0030
+//     lands in 0x10456afc, which is copied into the renderer's stereo object
+//     (+0x18) and read through IsEnabled (0x1000d660) at ~14 sites. When it is on
+//     every draw is issued once per eye into two render targets, and the eyes are
+//     composited half width side by side (0x1000c0b0, x0.5 at 0x10329a08) and
+//     blitted. A 10px sync strip is added on alternate frames. The 1024x2 column
+//     masks it builds (0x1000c900) are never sampled. 0031 (0.006f) has no reader;
+//     the eye shift the game actually uses is a separate constant.
+//
+// NOT YET VERIFIED: not seen on a screen. How the picture is presented -- layouts, eye swap,
+// depth, and removing that strip -- is ffxi3dview.cpp; this block is only the switch.
+//
+// Delivered through the same read hook as [reg:...] and with the same promise:
+// nothing on the machine is written, and turning the row off undoes it. An
+// explicit [reg:SquareEnix\FinalFantasyXI] 0030= entry still wins -- it is checked
+// first, for the precedence reason hook_RQVA gives.
+//
+// A plain LONG, not part of g_rs: the table is not safe to rebuild while other
+// threads are inside the hook, and this flag has to follow Save. FFXI reads 0030
+// when it starts, so a change applies at the next FFXI launch, no Viewer restart.
+// ============================================================================
+static volatile LONG g_ffxi3d      = 0;
+static volatile LONG g_ffxi3d_hits = 0;
+
+void ffxi3d_reload(const wchar_t* ini)
+{
+    LONG on = GetPrivateProfileIntW(L"ffxi", L"stereo3d", 0, ini) ? 1 : 0;
+    LONG was = InterlockedExchange(&g_ffxi3d, on);
+    if (on != was)
+        logf("[ffxi3d] FFXI 3D display mode %s -- takes effect the next time FFXI "
+             "starts", on ? "ON (0030=1 will be answered from the shim)" : "OFF");
+}
+
+int ffxi3d_enabled(void) { return g_ffxi3d ? 1 : 0; }
+
+static bool ffxi3d_wants(HKEY hKey, const char* nameA, const wchar_t* nameW)
+{
+    if (!g_ffxi3d) return false;
+    if (nameA ? strcmp(nameA, "0030") != 0 : wcscmp(nameW, L"0030") != 0) return false;
+    wchar_t path[512];
+    if (!key_path(hKey, path, _countof(path))) return false;
+    // FinalFantasyXI only -- the Test Client's key ends "...TestClient", so a tail
+    // match leaves it alone, which is right: nobody has measured that build.
+    if (!rs_key_matches(path, L"SquareEnix\\FinalFantasyXI")) return false;
+    if (InterlockedIncrement(&g_ffxi3d_hits) == 1)
+        logf("[ffxi3d] SERVING 0030 = 1 (3D LCD Mode) under %ls -- the registry "
+             "itself is untouched", path);
+    return true;
+}
+
+// Against REAL keys under HKCU, because the part that can be wrong is key_path()
+// plus the tail match, and a string-only test would not exercise either. Each
+// positive case has a twin that must be refused.
+int ffxi3d_selftest(void)
+{
+    int fail = 0;
+    #define CHK(c, m) do { if (!(c)) { logf("[ffxi3d] SELFTEST FAIL: %s", m); fail++; } } while (0)
+
+    static const wchar_t* ROOT = L"Software\\polshim-selftest-ffxi3d";
+    HKEY xi = NULL, tc = NULL;
+    RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\polshim-selftest-ffxi3d\\SquareEnix\\FinalFantasyXI",
+                    0, NULL, 0, KEY_READ, NULL, &xi, NULL);
+    RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\polshim-selftest-ffxi3d\\SquareEnix\\FinalFantasyXITestClient",
+                    0, NULL, 0, KEY_READ, NULL, &tc, NULL);
+    CHK(xi && tc, "could not create the scratch keys under HKCU");
+    if (xi && tc) {
+        LONG saved = InterlockedExchange(&g_ffxi3d, 0);
+        CHK(!ffxi3d_wants(xi, "0030", NULL), "the row is OFF -- nothing may be served");
+        InterlockedExchange(&g_ffxi3d, 1);
+        CHK(ffxi3d_wants(xi, "0030", NULL),   "ON: 0030 under FinalFantasyXI is served (A)");
+        CHK(ffxi3d_wants(xi, NULL, L"0030"),  "ON: 0030 under FinalFantasyXI is served (W)");
+        CHK(!ffxi3d_wants(xi, "0031", NULL),  "ON: a neighbouring value must NOT be served");
+        CHK(!ffxi3d_wants(tc, "0030", NULL),  "ON: the Test Client's key must NOT match");
+        InterlockedExchange(&g_ffxi3d, saved);
+    }
+    if (xi) RegCloseKey(xi);
+    if (tc) RegCloseKey(tc);
+    RegDeleteTreeW(HKEY_CURRENT_USER, ROOT);
+
+    #undef CHK
+    if (!fail) logf("[ffxi3d] selftest OK");
+    return fail;
+}
+
 static LONG WINAPI hook_RQVA(HKEY hKey, LPCSTR name, LPDWORD reserved,
                              LPDWORD lpType, LPBYTE lpData, LPDWORD lpcbData)
 {
@@ -1013,6 +1110,8 @@ static LONG WINAPI hook_RQVA(HKEY hKey, LPCSTR name, LPDWORD reserved,
             return e->is_dword ? serve_dword(e->dw, lpType, lpData, lpcbData)
                                : serve_szA(e->szA, lpType, lpData, lpcbData);
     }
+    if (name && ffxi3d_wants(hKey, name, NULL))
+        return serve_dword(1, lpType, lpData, lpcbData);
 
     // seed_pad: supply a measured value the title asked for and the registry does
     // not have. Absent ONLY -- anything already stored wins, always.
@@ -1141,6 +1240,8 @@ static LONG WINAPI hook_RQVW(HKEY hKey, LPCWSTR name, LPDWORD reserved,
             return e->is_dword ? serve_dword(e->dw, lpType, lpData, lpcbData)
                                : serve_szW(e->szW, lpType, lpData, lpcbData);
     }
+    if (name && ffxi3d_wants(hKey, NULL, name))
+        return serve_dword(1, lpType, lpData, lpcbData);
 
     // seed_pad: supply a measured value the title asked for and the registry does
     // not have. Absent ONLY -- anything already stored wins, always.
@@ -1258,7 +1359,7 @@ static LONG WINAPI hook_RQVW(HKEY hKey, LPCWSTR name, LPDWORD reserved,
 
 void installdir_resolve()
 {
-    if (!g_on && !swap_active() && !g_forcepad && !g_seedpad) return;      // stay out of every IAT when both off
+    if (!g_on && !swap_active() && !g_forcepad && !g_seedpad && !g_ffxi3d) return;      // stay out of every IAT when both off
     HMODULE adv = GetModuleHandleW(L"advapi32.dll");
     if (!adv) adv = LoadLibraryW(L"advapi32.dll");
     if (adv) {
@@ -1293,7 +1394,7 @@ void installdir_resolve()
 // the pass-through calls reach real code and never recurse.
 void installdir_eat_patch()
 {
-    if (!g_on && !swap_active() && !g_forcepad && !g_seedpad) return;      // stay out of every EAT when both off
+    if (!g_on && !swap_active() && !g_forcepad && !g_seedpad && !g_ffxi3d) return;      // stay out of every EAT when both off
     HMODULE adv = GetModuleHandleW(L"advapi32.dll");
     if (!adv) adv = LoadLibraryW(L"advapi32.dll");
     if (!adv) return;
@@ -1315,9 +1416,9 @@ void installdir_eat_patch()
 }
 
 void* installdir_real_RegQueryValueExA() { return (void*)real_RQVA; }
-void* installdir_hook_RegQueryValueExA() { return (g_on || swap_active() || g_forcepad || g_seedpad || g_rs_n) ? (void*)hook_RQVA : NULL; }
+void* installdir_hook_RegQueryValueExA() { return (g_on || swap_active() || g_forcepad || g_seedpad || g_rs_n || g_ffxi3d) ? (void*)hook_RQVA : NULL; }
 void* installdir_real_RegQueryValueExW() { return (void*)real_RQVW; }
-void* installdir_hook_RegQueryValueExW() { return (g_on || swap_active() || g_forcepad || g_seedpad || g_rs_n) ? (void*)hook_RQVW : NULL; }
+void* installdir_hook_RegQueryValueExW() { return (g_on || swap_active() || g_forcepad || g_seedpad || g_rs_n || g_ffxi3d) ? (void*)hook_RQVW : NULL; }
 
 // --- init helpers -----------------------------------------------------------
 
