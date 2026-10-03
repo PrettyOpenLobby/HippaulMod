@@ -179,14 +179,13 @@ static void rows(void* d, void* t, float x0, float x1, int y0, int y1, int parit
 }
 
 static LONG g_drawlog = 0;
+static volatile LONG g_uiblit_seen = 0;    // UI layer pasted per eye this launch
+static volatile LONG g_composites  = 0;    // 3D frames this launch
 
-static void present(void* dev, void* left, void* right, const int* r, LONG lay)
+// A plain opaque textured draw, whatever the game had set. Caller holds a state
+// block around it.
+static void plain_states(void* dev)
 {
-    DWORD sb = 0;
-    if (FAILED(((PFN_CreateSB)VSLOT(dev, DV_CreateStateBlock))(dev, 1 /*D3DSBT_ALL*/, &sb)))
-        return;
-
-    // A plain opaque textured draw, whatever the game had set.
     ((PFN_U1)VSLOT(dev, DV_SetVertexShader))(dev, FVF_XYZRHW_DIFFUSE_TEX1);
     ((PFN_U1)VSLOT(dev, DV_SetPixelShader))(dev, 0);
     rs(dev, 7, 0);   rs(dev, 14, 0);              // ZENABLE, ZWRITEENABLE
@@ -201,6 +200,14 @@ static void present(void* dev, void* left, void* right, const int* r, LONG lay)
     tss(dev, 0, 16, 2); tss(dev, 0, 17, 2); tss(dev, 0, 18, 0);  // LINEAR, no mip
     tss(dev, 1, 1, 1);  tss(dev, 1, 4, 1);        // stage 1 off
     tex(dev, 1, NULL);
+}
+
+static void present(void* dev, void* left, void* right, const int* r, LONG lay)
+{
+    DWORD sb = 0;
+    if (FAILED(((PFN_CreateSB)VSLOT(dev, DV_CreateStateBlock))(dev, 1 /*D3DSBT_ALL*/, &sb)))
+        return;
+    plain_states(dev);
 
     float x0 = (float)r[0], y0 = (float)r[1], x1 = (float)r[2], y1 = (float)r[3];
     float xm = (x0 + x1) * 0.5f, ym = (float)((r[1] + r[3]) / 2);
@@ -250,6 +257,14 @@ static void __fastcall my_composite(void* self, void* edx, void** texs, DWORD co
 {
     g_composite(self, edx, texs, color, rect, rect2);
 
+    // The UI duplication needs the menu buffer. If it never shows up, say so once
+    // rather than leave "the menus are still flat" unexplained.
+    if (InterlockedIncrement(&g_composites) == 300 && !g_uiblit_seen &&
+        (g_layout == LAY_SBS || g_layout == LAY_TAB))
+        logf("[ffxi3d] 300 3D frames and the UI layer was never pasted separately -- "
+             "the menu buffer is missing (created before the patch landed?), so the "
+             "UI stays a single full-width layer");
+
     LONG lay = g_layout;
     if (lay == LAY_ORIGINAL || (lay == LAY_SBS && !g_swap)) return;   // game's own output
     if (!self || !texs || !rect) return;
@@ -267,6 +282,66 @@ static void __fastcall my_tagstrip(void* self, void* edx, int* rect)
 }
 
 // ---------------------------------------------------------------------------
+// THE UI. FFXI draws menus, chat and the HUD AFTER the eye composite, so in a
+// side-by-side or top-and-bottom picture they straddle the two halves and each
+// eye gets half a menu. When the game has a separate menu buffer (renderer+0x1E0,
+// made when the menu resolution differs from the window's) the whole UI is first
+// drawn into that texture -- over a copy of the left-eye world, with alpha 0
+// where no UI was drawn -- and 0x1000abe0 then pastes it onto the screen with an
+// alpha test (alpha > 0, no blending). For sbs/tab we paste it twice instead,
+// squashed into each half, with the same test. Semi-transparent windows show the
+// left eye's world behind them in both halves: a flat pane at screen depth.
+//
+// The menu buffer is forced to exist (below) so this path is always there.
+// ---------------------------------------------------------------------------
+typedef void (__fastcall *PFN_UIBLIT)(void*, void*, void*, DWORD);
+static PFN_UIBLIT g_uiblit = NULL;
+
+#define DV_GetViewport 41
+struct VP8 { DWORD X, Y, Width, Height; float MinZ, MaxZ; };
+typedef HRESULT (__stdcall *PFN_GetVP)(void*, VP8*);
+
+static void __fastcall my_uiblit(void* self, void* edx, void* uitex, DWORD alpha)
+{
+    LONG lay = g_layout;
+    void* dev = self ? *(void**)((char*)self + 0xC) : NULL;
+    if ((lay != LAY_SBS && lay != LAY_TAB) || !dev || !uitex) {
+        g_uiblit(self, edx, uitex, alpha);
+        return;
+    }
+    VP8 vp = {};
+    if (FAILED(((PFN_GetVP)VSLOT(dev, DV_GetViewport))(dev, &vp)) || !vp.Width || !vp.Height) {
+        g_uiblit(self, edx, uitex, alpha);
+        return;
+    }
+    DWORD sb = 0;
+    if (FAILED(((PFN_CreateSB)VSLOT(dev, DV_CreateStateBlock))(dev, 1, &sb))) {
+        g_uiblit(self, edx, uitex, alpha);
+        return;
+    }
+    plain_states(dev);
+    rs(dev, 15, 1);  rs(dev, 24, 0);  rs(dev, 25, 5);   // ALPHATEST on, REF 0, GREATER
+
+    float x0 = (float)vp.X, y0 = (float)vp.Y;
+    float x1 = x0 + vp.Width, y1 = y0 + vp.Height;
+    if (lay == LAY_SBS) {
+        float xm = (x0 + x1) * 0.5f;
+        quad(dev, uitex, x0, y0, xm, y1, 0, 1);
+        quad(dev, uitex, xm, y0, x1, y1, 0, 1);
+    } else {
+        float ym = (y0 + y1) * 0.5f;
+        quad(dev, uitex, x0, y0, x1, ym, 0, 1);
+        quad(dev, uitex, x0, ym, x1, y1, 0, 1);
+    }
+    ((PFN_U1)VSLOT(dev, DV_ApplyStateBlock))(dev, sb);
+    ((PFN_U1)VSLOT(dev, DV_DeleteStateBlock))(dev, sb);
+
+    if (InterlockedIncrement(&g_uiblit_seen) == 1)
+        logf("[ffxi3d] UI layer drawn once per eye (%s, %lux%lu)", lay_name(lay),
+             vp.Width, vp.Height);
+}
+
+// ---------------------------------------------------------------------------
 // finding things. Function bodies by pattern, then the ONE call to each.
 // ---------------------------------------------------------------------------
 static const char* const PAT_COMPOSITE =   // sub esp,84h; push esi; mov esi,ecx;
@@ -275,6 +350,49 @@ static const char* const PAT_TAGSTRIP =
     "A0????????56A8018BF10F85????????0C01B980808080";
 static const char* const PAT_EYESHIFT =    // eye 1: mov eax,[sep] ... eye 0: fld [sep]; fchs
     "8B861008000083E800740E487517A1????????89442434EB0CD905????????D9E0";
+// The UI-layer paste (0x1000abe0). Its opening is shared with a look-alike blit at
+// 0x1000aab0, so it is found by what only it does -- ALPHABLENDENABLE 0, then
+// ALPHAFUNC GREATER, ALPHAREF 0 -- and the function start is the nearest
+// `push esi; mov esi,ecx; call` before that.
+static const char* const PAT_UIBLIT_BODY =
+    "6A006A1B508B08FF91C80000008B460C6A056A19508B10FF92C80000008B460C6A006A18508B08FF91C8000000";
+#define UIBLIT_BACK_MAX 0x140
+
+static const unsigned char* find_uiblit(const unsigned char* base, size_t size)
+{
+    const unsigned char* body = pol_pattern_find(base, size, PAT_UIBLIT_BODY);
+    if (!body || body - base < UIBLIT_BACK_MAX) return NULL;
+    for (const unsigned char* p = body - 4; p >= body - UIBLIT_BACK_MAX; p--)
+        if (p[0] == 0x56 && p[1] == 0x8B && p[2] == 0xF1 && p[3] == 0xE8) return p;
+    return NULL;
+}
+// Renderer setup's menu-buffer decision (0x10011680): menu w/h zero -> skip;
+// menu size == window size -> skip (the final `je`, at +32). That last skip is
+// the one removed, so a menu buffer exists even at equal sizes.
+static const char* const PAT_MENUCHK =
+    "668B4614663BC30F84????????668B4E16663BCB74??663B46107506663B4E1274??";
+#define MENUCHK_JE_OFS 32
+
+// .text is EMPTY on disk (the POL1 stub fills it in DllMain), so "is it unpacked
+// yet" is one cheap read -- which lets the poller run fast enough to land the
+// menu-buffer patch before the renderer is built, without a 12 MB scan per tick.
+static bool text_unpacked(const unsigned char* base)
+{
+    const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)base;
+    const IMAGE_NT_HEADERS32* nt = (const IMAGE_NT_HEADERS32*)(base + dos->e_lfanew);
+    const IMAGE_SECTION_HEADER* s = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++, s++) {
+        // MEM_EXECUTE, not CNT_CODE: the packer marks .text as executable
+        // UNINITIALIZED data (0xE0000080), with no code flag at all.
+        if (!(s->Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
+        const unsigned char* p = base + s->VirtualAddress;
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+        for (int k = 0; k < 64; k++) if (p[k]) return true;
+        return false;
+    }
+    return false;
+}
 
 static unsigned char* find_one_call(const unsigned char* base, size_t size,
                                     const unsigned char* target, int* count)
@@ -321,9 +439,36 @@ static bool try_install(void)
 {
     const unsigned char* base = NULL; size_t size = 0;
     if (!pol_module_range("FFXiMain.dll", &base, &size)) return false;
+    if (!text_unpacked(base)) return false;
+
+    // FIRST, while the race is still winnable: keep the menu buffer. Renderer
+    // setup runs once per FFXI launch, soon after load.
+    const unsigned char* fm = pol_pattern_find(base, size, PAT_MENUCHK);
+    if (fm && fm[MENUCHK_JE_OFS] == 0x74) {
+        unsigned char* je = (unsigned char*)fm + MENUCHK_JE_OFS;
+        DWORD old;
+        if (VirtualProtect(je, 2, PAGE_EXECUTE_READWRITE, &old)) {
+            je[0] = 0x90; je[1] = 0x90;
+            VirtualProtect(je, 2, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), je, 2);
+            logf("[ffxi3d] menu buffer kept even at window size (FFXiMain.dll+0x%X), so "
+                 "the UI can be drawn once per eye", (unsigned)(je - base));
+        }
+    } else {
+        logf("[ffxi3d] menu-buffer check not found -- the UI is only drawn per eye when "
+             "FFXI's menu resolution differs from its window resolution");
+    }
+
     const unsigned char* fc = pol_pattern_find(base, size, PAT_COMPOSITE);
     const unsigned char* ft = pol_pattern_find(base, size, PAT_TAGSTRIP);
-    if (!fc || !ft) return false;                   // not unpacked yet, or a new build
+    if (!fc || !ft) {
+        // .text is unpacked, so a miss now is a different client build, not "too
+        // early". Decide once instead of re-patching and re-logging every tick.
+        logf("[ffxi3d] NOT installed: composite %s, sync strip %s in this FFXiMain.dll "
+             "-- 3D stays the game's own output", fc ? "found" : "MISSING",
+             ft ? "found" : "MISSING");
+        return true;
+    }
 
     int nc = 0, nt = 0;
     unsigned char* sc = find_one_call(base, size, fc, &nc);
@@ -345,6 +490,18 @@ static bool try_install(void)
          "sync strip +0x%X (called at +0x%X)",
          (unsigned)(fc - base), (unsigned)(sc - base),
          (unsigned)(ft - base), (unsigned)(st - base));
+
+    const unsigned char* fu = find_uiblit(base, size);
+    int nu = 0;
+    unsigned char* su = fu ? find_one_call(base, size, fu, &nu) : NULL;
+    if (su && nu == 1 && retarget(su, (void*)my_uiblit)) {
+        g_uiblit = (PFN_UIBLIT)fu;
+        logf("[ffxi3d] UI layer paste +0x%X (called at +0x%X) hooked",
+             (unsigned)(fu - base), (unsigned)(su - base));
+    } else {
+        logf("[ffxi3d] UI layer paste not hooked (found=%d calls=%d) -- the UI stays one "
+             "full-width layer", fu ? 1 : 0, nu);
+    }
 
     // Depth: the two reads of the eye-shift constant must name the same address.
     const unsigned char* fe = pol_pattern_find(base, size, PAT_EYESHIFT);
@@ -372,9 +529,11 @@ static volatile LONG g_running = 0;
 
 static DWORD WINAPI install_thread(LPVOID)
 {
-    for (int t = 0; t < 240; t++) {                 // 60 s, the ffxicfg poller's bound
-        Sleep(250);
+    // 5 ms ticks: try_install returns at once until .text is unpacked, and the
+    // menu-buffer patch has to beat the renderer's setup. 12000 x 5 ms = 60 s.
+    for (int t = 0; t < 12000; t++) {
         if (try_install()) { InterlockedExchange(&g_running, 0); return 0; }
+        Sleep(5);
     }
     logf("[ffxi3d] gave up waiting for FFXiMain.dll's renderer code -- 3D stays the "
          "game's own output");
@@ -395,6 +554,8 @@ void ffxi3dview_on_module(void* base)
     // A fresh image: the old patches went with the old one.
     g_sep = NULL;
     InterlockedExchange(&g_drawlog, 0);
+    InterlockedExchange(&g_uiblit_seen, 0);
+    InterlockedExchange(&g_composites, 0);
     if (InterlockedExchange(&g_running, 1)) return;
     HANDLE h = CreateThread(NULL, 0, install_thread, NULL, 0, NULL);
     if (!h) { InterlockedExchange(&g_running, 0); return; }
