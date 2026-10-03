@@ -86,11 +86,14 @@ static void apply_depth(void)
 void ffxi3dview_reload(const wchar_t* ini)
 {
     wchar_t v[32];
-    GetPrivateProfileStringW(L"ffxi", L"stereo3d_layout", L"sbs", v, _countof(v), ini);
+    // ffxi_ini_str: the dialog's FFXI section saves these as [ffxi.FFXiMain.dll]
+    // overrides, so they are read there first.
+    ffxi_ini_str(L"stereo3d_layout", L"sbs", v, _countof(v), ini);
     LONG lay = parse_layout(v);
-    GetPrivateProfileStringW(L"ffxi", L"stereo3d_depth", L"normal", v, _countof(v), ini);
+    ffxi_ini_str(L"stereo3d_depth", L"normal", v, _countof(v), ini);
     LONG dep = parse_depth(v);
-    LONG swp = GetPrivateProfileIntW(L"ffxi", L"stereo3d_swap", 0, ini) ? 1 : 0;
+    ffxi_ini_str(L"stereo3d_swap", L"0", v, _countof(v), ini);
+    LONG swp = wcstol(v, NULL, 10) ? 1 : 0;
 
     LONG ol = InterlockedExchange(&g_layout, lay);
     LONG os = InterlockedExchange(&g_swap, swp);

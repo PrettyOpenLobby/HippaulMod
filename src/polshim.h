@@ -1324,6 +1324,24 @@ void  regserve_configure(const wchar_t* ini);
 void  ffxi3d_reload(const wchar_t* ini);     // [ffxi] stereo3d -> answer FFXI's 0030 (3D LCD Mode) with 1
 int   ffxi3d_selftest(void);
 int   ffxi3d_enabled(void);
+// An [ffxi] key, resolved the way the settings dialog shows it: the per-game
+// override [ffxi.FFXiMain.dll] first, then [ffxi]. The dialog's FFXI section saves
+// a changed row as that per-game override, so a plain [ffxi] read misses the
+// user's choice entirely. Explicit rather than ini_str_title because these keys
+// must be known BEFORE FFXiMain loads, when no title scope is set.
+static inline DWORD ffxi_ini_str(const wchar_t* key, const wchar_t* def,
+                                 wchar_t* out, DWORD cch, const wchar_t* ini)
+{
+    wchar_t probe[64] = L"";
+    GetPrivateProfileStringW(L"ffxi.FFXiMain.dll", key, L"\x01", probe,
+                             (DWORD)(sizeof(probe) / sizeof(probe[0])), ini);
+    if (probe[0] != 1) {
+        ini_decomment(probe);
+        wcsncpy_s(out, cch, probe, _TRUNCATE);
+        return (DWORD)wcslen(out);
+    }
+    return ini_str(L"ffxi", key, def, out, cch, ini);
+}
 // ffxi3dview.cpp -- how the 3D image is presented (layout, eye swap, depth)
 void  ffxi3dview_reload(const wchar_t* ini);
 void  ffxi3dview_on_module(void* base);

@@ -1038,7 +1038,9 @@ static volatile LONG g_ffxi3d_hits = 0;
 
 void ffxi3d_reload(const wchar_t* ini)
 {
-    LONG on = GetPrivateProfileIntW(L"ffxi", L"stereo3d", 0, ini) ? 1 : 0;
+    wchar_t v[16];
+    ffxi_ini_str(L"stereo3d", L"0", v, _countof(v), ini);
+    LONG on = wcstol(v, NULL, 10) ? 1 : 0;
     LONG was = InterlockedExchange(&g_ffxi3d, on);
     if (on != was)
         logf("[ffxi3d] FFXI 3D display mode %s -- takes effect the next time FFXI "
@@ -1090,6 +1092,27 @@ int ffxi3d_selftest(void)
     if (xi) RegCloseKey(xi);
     if (tc) RegCloseKey(tc);
     RegDeleteTreeW(HKEY_CURRENT_USER, ROOT);
+
+    // The settings dialog's FFXI section saves a ticked row as a PER-GAME override
+    // ([ffxi.FFXiMain.dll]); reading only [ffxi] made the tick vanish (10-03).
+    {
+        wchar_t tmp[MAX_PATH], ini[MAX_PATH];
+        GetTempPathW(MAX_PATH, tmp);
+        GetTempFileNameW(tmp, L"f3d", 0, ini);
+        LONG saved = g_ffxi3d;
+        WritePrivateProfileStringW(L"ffxi", L"stereo3d", L"0", ini);
+        ffxi3d_reload(ini);
+        CHK(!g_ffxi3d, "global 0 and no override: OFF");
+        WritePrivateProfileStringW(L"ffxi.FFXiMain.dll", L"stereo3d", L"1", ini);
+        ffxi3d_reload(ini);
+        CHK(g_ffxi3d, "the dialog's per-game override (1) beats the global 0");
+        WritePrivateProfileStringW(L"ffxi.FFXiMain.dll", L"stereo3d", L"0", ini);
+        WritePrivateProfileStringW(L"ffxi", L"stereo3d", L"1", ini);
+        ffxi3d_reload(ini);
+        CHK(!g_ffxi3d, "a per-game 0 beats a global 1");
+        DeleteFileW(ini);
+        InterlockedExchange(&g_ffxi3d, saved);
+    }
 
     #undef CHK
     if (!fail) logf("[ffxi3d] selftest OK");
