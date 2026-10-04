@@ -429,7 +429,7 @@ static const ShimOption g_opts[] = {
   // than written -- see the ffxi3d block in regredir.cpp for the decode. OFF by
   // default and NOT seen on a screen yet.
   { L"ffxi",      L"stereo3d",       L"0",    OPT_BOOL, L"3D display mode", NULL, false,
-    L"Applies the next time FFXI starts." },
+    L"Applies next time FFXI starts. Skips the opening movie." },
   // How the two eye images reach the screen (ffxi3dview.cpp). Side by side is the
   // game's own output with the old panel's flickering sync strip removed; the
   // others are drawn by the shim from the game's two eye images. All three rows

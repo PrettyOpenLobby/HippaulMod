@@ -1064,6 +1064,27 @@ static bool ffxi3d_wants(HKEY hKey, const char* nameA, const wchar_t* nameW)
     return true;
 }
 
+// FFXI's opening movie is played by DirectShow straight onto the window, outside
+// Direct3D, so the 3D layouts cannot reach it: in side by side each eye got half
+// the picture. With 3D on it is skipped through FFXI's OWN switch, 0022 ("Play
+// opening movie on startup"), answered as 0. Decoded 2026-10-03 from the config
+// app, not from community lists (which put it at 0021 and are off by one):
+// control 1003 -> global 0x706e08 -> table row 0022; control 1026 (simplified
+// character creation) -> 0x706e0c -> 0023. Turning 3D off brings the movie back.
+static volatile LONG g_ffxi3d_movie_hits = 0;
+static bool ffxi3d_skip_movie(HKEY hKey, const char* nameA, const wchar_t* nameW)
+{
+    if (!g_ffxi3d) return false;
+    if (nameA ? strcmp(nameA, "0022") != 0 : wcscmp(nameW, L"0022") != 0) return false;
+    wchar_t path[512];
+    if (!key_path(hKey, path, _countof(path))) return false;
+    if (!rs_key_matches(path, L"SquareEnix\\FinalFantasyXI")) return false;
+    if (InterlockedIncrement(&g_ffxi3d_movie_hits) == 1)
+        logf("[ffxi3d] SERVING 0022 = 0 (opening movie off while 3D is on -- it plays "
+             "outside Direct3D, so it cannot be shown per eye)");
+    return true;
+}
+
 // Against REAL keys under HKCU, because the part that can be wrong is key_path()
 // plus the tail match, and a string-only test would not exercise either. Each
 // positive case has a twin that must be refused.
@@ -1084,11 +1105,16 @@ int ffxi3d_selftest(void)
     if (xi && tc) {
         LONG saved = InterlockedExchange(&g_ffxi3d, 0);
         CHK(!ffxi3d_wants(xi, "0030", NULL), "the row is OFF -- nothing may be served");
+        CHK(!ffxi3d_skip_movie(xi, "0022", NULL), "OFF: the movie plays as configured");
         InterlockedExchange(&g_ffxi3d, 1);
         CHK(ffxi3d_wants(xi, "0030", NULL),   "ON: 0030 under FinalFantasyXI is served (A)");
         CHK(ffxi3d_wants(xi, NULL, L"0030"),  "ON: 0030 under FinalFantasyXI is served (W)");
         CHK(!ffxi3d_wants(xi, "0031", NULL),  "ON: a neighbouring value must NOT be served");
         CHK(!ffxi3d_wants(tc, "0030", NULL),  "ON: the Test Client's key must NOT match");
+        CHK(ffxi3d_skip_movie(xi, "0022", NULL),  "ON: the opening movie (0022) is answered off (A)");
+        CHK(ffxi3d_skip_movie(xi, NULL, L"0022"), "ON: the opening movie (0022) is answered off (W)");
+        CHK(!ffxi3d_skip_movie(xi, "0023", NULL), "ON: 0023 (simplified character creation) is NOT touched");
+        CHK(!ffxi3d_skip_movie(tc, "0022", NULL), "ON: the Test Client's movie is NOT touched");
 
         // Menu resolution: 0 -> the window's; a chosen one is left alone.
         if (!real_RQVA) real_RQVA = (PFN_RQVA)GetProcAddress(GetModuleHandleW(L"advapi32.dll"), "RegQueryValueExA");
@@ -1204,6 +1230,8 @@ static LONG WINAPI hook_RQVA(HKEY hKey, LPCSTR name, LPDWORD reserved,
     }
     if (name && ffxi3d_wants(hKey, name, NULL))
         return serve_dword(1, lpType, lpData, lpcbData);
+    if (name && ffxi3d_skip_movie(hKey, name, NULL))
+        return serve_dword(0, lpType, lpData, lpcbData);
     { DWORD ms; if (name && ffxi3d_menu_size(hKey, name, NULL, &ms))
         return serve_dword(ms, lpType, lpData, lpcbData); }
 
@@ -1336,6 +1364,8 @@ static LONG WINAPI hook_RQVW(HKEY hKey, LPCWSTR name, LPDWORD reserved,
     }
     if (name && ffxi3d_wants(hKey, NULL, name))
         return serve_dword(1, lpType, lpData, lpcbData);
+    if (name && ffxi3d_skip_movie(hKey, NULL, name))
+        return serve_dword(0, lpType, lpData, lpcbData);
     { DWORD ms; if (name && ffxi3d_menu_size(hKey, NULL, name, &ms))
         return serve_dword(ms, lpType, lpData, lpcbData); }
 
