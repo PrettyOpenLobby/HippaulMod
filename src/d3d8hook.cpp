@@ -3286,6 +3286,11 @@ static HRESULT STDMETHODCALLTYPE hook_CreateDevice(void* self, UINT adapter, DWO
                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                            (LPCSTR)caller_ra, &g_title_module);
 
+    // FFXI 3D: the menu-buffer patch must be in before FFXI builds its render
+    // targets, which it does right after this call returns. No-op unless [ffxi]
+    // stereo3d is on; idempotent per loaded FFXiMain image. See ffxi3dview.cpp.
+    ffxi3dview_before_device();
+
     // Arm the Fantasy Earth teardown guard. CreateDevice's return address lands in
     // the calling title, and FE's teardown crash only occurs once its device is
     // created (i.e. after this call), so this is both the reliable post-unpack

@@ -1345,6 +1345,7 @@ static inline DWORD ffxi_ini_str(const wchar_t* key, const wchar_t* def,
 // ffxi3dview.cpp -- how the 3D image is presented (layout, eye swap, depth)
 void  ffxi3dview_reload(const wchar_t* ini);
 void  ffxi3dview_on_module(void* base);
+void  ffxi3dview_before_device(void);        // d3d8 CreateDevice, before the real call
 int   ffxi3dview_selftest(void);
 // FFXiMain code search, shared from ffxicfg.cpp (Ashita's ?? pattern notation)
 const unsigned char* pol_pattern_find(const unsigned char* base, size_t size, const char* pat);

@@ -1067,6 +1067,8 @@ static bool ffxi3d_wants(HKEY hKey, const char* nameA, const wchar_t* nameW)
 // Against REAL keys under HKCU, because the part that can be wrong is key_path()
 // plus the tail match, and a string-only test would not exercise either. Each
 // positive case has a twin that must be refused.
+static bool ffxi3d_menu_size(HKEY hKey, const char* nameA, const wchar_t* nameW, DWORD* out);
+
 int ffxi3d_selftest(void)
 {
     int fail = 0;
@@ -1087,6 +1089,30 @@ int ffxi3d_selftest(void)
         CHK(ffxi3d_wants(xi, NULL, L"0030"),  "ON: 0030 under FinalFantasyXI is served (W)");
         CHK(!ffxi3d_wants(xi, "0031", NULL),  "ON: a neighbouring value must NOT be served");
         CHK(!ffxi3d_wants(tc, "0030", NULL),  "ON: the Test Client's key must NOT match");
+
+        // Menu resolution: 0 -> the window's; a chosen one is left alone.
+        if (!real_RQVA) real_RQVA = (PFN_RQVA)GetProcAddress(GetModuleHandleW(L"advapi32.dll"), "RegQueryValueExA");
+        if (!real_RQVW) real_RQVW = (PFN_RQVW)GetProcAddress(GetModuleHandleW(L"advapi32.dll"), "RegQueryValueExW");
+        HKEY xw = NULL;
+        RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\polshim-selftest-ffxi3d\\SquareEnix\\FinalFantasyXI",
+                      0, KEY_READ | KEY_SET_VALUE, &xw);
+        CHK(xw != NULL, "reopen the scratch key for writing");
+        if (xw) {
+            DWORD w = 1024, h = 768, z = 0, chosen = 1920, ms = 0;
+            RegSetValueExW(xw, L"0001", 0, REG_DWORD, (BYTE*)&w, 4);
+            RegSetValueExW(xw, L"0002", 0, REG_DWORD, (BYTE*)&h, 4);
+            RegSetValueExW(xw, L"0037", 0, REG_DWORD, (BYTE*)&z, 4);
+            CHK(ffxi3d_menu_size(xw, "0037", NULL, &ms) && ms == 1024, "ON: menu width 0 -> window width (A)");
+            CHK(ffxi3d_menu_size(xw, NULL, L"0038", &ms) && ms == 768,  "ON: menu height ABSENT -> window height (W)");
+            RegSetValueExW(xw, L"0037", 0, REG_DWORD, (BYTE*)&chosen, 4);
+            CHK(!ffxi3d_menu_size(xw, "0037", NULL, &ms), "ON: a chosen menu width is left alone");
+            CHK(!ffxi3d_menu_size(xw, "0001", NULL, &ms), "ON: other values are not touched");
+            InterlockedExchange(&g_ffxi3d, 0);
+            RegSetValueExW(xw, L"0037", 0, REG_DWORD, (BYTE*)&z, 4);
+            CHK(!ffxi3d_menu_size(xw, "0037", NULL, &ms), "OFF: nothing is served");
+            CHK(!ffxi3d_menu_size(tc, "0037", NULL, &ms), "the Test Client's key must NOT match");
+            RegCloseKey(xw);
+        }
         InterlockedExchange(&g_ffxi3d, saved);
     }
     if (xi) RegCloseKey(xi);
@@ -1119,6 +1145,49 @@ int ffxi3d_selftest(void)
     return fail;
 }
 
+// The UI is drawn once per eye only through FFXI's menu buffer, and renderer setup
+// skips that buffer outright when the menu resolution (0037/0038) is 0 -- "same as
+// the window", the common setting (measured 2026-10-03: 0037=0038=0 on CasPC,
+// window 1024x768, and the UI stayed one full-width layer). So with 3D on, a
+// menu size of 0 or absent is answered as the window size (0001/0002). Sizes are
+// then equal, and ffxi3dview's patched check keeps the buffer. A menu resolution
+// the player actually chose is left exactly as it is.
+static bool ffxi3d_menu_size(HKEY hKey, const char* nameA, const wchar_t* nameW, DWORD* out)
+{
+    if (!g_ffxi3d) return false;
+    int which;
+    if (nameA) {
+        if      (!strcmp(nameA, "0037")) which = 0;
+        else if (!strcmp(nameA, "0038")) which = 1;
+        else return false;
+        if (!real_RQVA) return false;
+    } else {
+        if      (!wcscmp(nameW, L"0037")) which = 0;
+        else if (!wcscmp(nameW, L"0038")) which = 1;
+        else return false;
+        if (!real_RQVW) return false;
+    }
+    wchar_t path[512];
+    if (!key_path(hKey, path, _countof(path))) return false;
+    if (!rs_key_matches(path, L"SquareEnix\\FinalFantasyXI")) return false;
+
+    DWORD v = 0, t = 0, cb = sizeof(v);
+    LONG rc = nameA ? real_RQVA(hKey, nameA, NULL, &t, (LPBYTE)&v, &cb)
+                    : real_RQVW(hKey, nameW, NULL, &t, (LPBYTE)&v, &cb);
+    if (rc == ERROR_SUCCESS && t == REG_DWORD && v != 0) return false;   // player's choice
+
+    DWORD w = 0; t = 0; cb = sizeof(w);
+    rc = nameA ? real_RQVA(hKey, which ? "0002" : "0001", NULL, &t, (LPBYTE)&w, &cb)
+               : real_RQVW(hKey, which ? L"0002" : L"0001", NULL, &t, (LPBYTE)&w, &cb);
+    if (rc != ERROR_SUCCESS || t != REG_DWORD || w == 0) return false;
+    *out = w;
+    static volatile LONG once[2] = { 0, 0 };
+    if (InterlockedIncrement(&once[which]) == 1)
+        logf("[ffxi3d] SERVING %s = %lu (menu resolution 0 -> the window's), so FFXI "
+             "keeps the menu buffer the 3D UI is drawn from", which ? "0038" : "0037", w);
+    return true;
+}
+
 static LONG WINAPI hook_RQVA(HKEY hKey, LPCSTR name, LPDWORD reserved,
                              LPDWORD lpType, LPBYTE lpData, LPDWORD lpcbData)
 {
@@ -1135,6 +1204,8 @@ static LONG WINAPI hook_RQVA(HKEY hKey, LPCSTR name, LPDWORD reserved,
     }
     if (name && ffxi3d_wants(hKey, name, NULL))
         return serve_dword(1, lpType, lpData, lpcbData);
+    { DWORD ms; if (name && ffxi3d_menu_size(hKey, name, NULL, &ms))
+        return serve_dword(ms, lpType, lpData, lpcbData); }
 
     // seed_pad: supply a measured value the title asked for and the registry does
     // not have. Absent ONLY -- anything already stored wins, always.
@@ -1265,6 +1336,8 @@ static LONG WINAPI hook_RQVW(HKEY hKey, LPCWSTR name, LPDWORD reserved,
     }
     if (name && ffxi3d_wants(hKey, NULL, name))
         return serve_dword(1, lpType, lpData, lpcbData);
+    { DWORD ms; if (name && ffxi3d_menu_size(hKey, NULL, name, &ms))
+        return serve_dword(ms, lpType, lpData, lpcbData); }
 
     // seed_pad: supply a measured value the title asked for and the registry does
     // not have. Absent ONLY -- anything already stored wins, always.

@@ -527,12 +527,42 @@ static bool try_install(void)
 
 static volatile LONG g_running = 0;
 
+// ONE install per loaded FFXiMain image, whoever gets there first: the poller, or
+// d3d8hook's CreateDevice. The poller alone lost the race in b195 -- FFXI builds
+// its render targets (and decides on the menu buffer) right after CreateDevice
+// returns, and a 5 ms poll on another thread is not guaranteed to land first.
+// CreateDevice is: FFXI is unpacked by then (it is the caller), and nothing that
+// matters has been built yet.
+static volatile LONG          g_inst_lock = 0;
+static const unsigned char* volatile g_inst_base = NULL;
+
+static bool install_once(void)
+{
+    const unsigned char* base = NULL; size_t size = 0;
+    if (!pol_module_range("FFXiMain.dll", &base, &size)) return false;
+    if (g_inst_base == base) return true;
+    while (InterlockedCompareExchange(&g_inst_lock, 1, 0)) Sleep(0);
+    bool done = (g_inst_base == base);
+    if (!done && try_install()) { g_inst_base = base; done = true; }
+    InterlockedExchange(&g_inst_lock, 0);
+    return done;
+}
+
+// From d3d8hook's CreateDevice, BEFORE the real call. Cheap when not FFXI.
+void ffxi3dview_before_device(void)
+{
+    if (!ffxi3d_enabled()) return;
+    if (install_once()) return;
+    logf("[ffxi3d] CreateDevice: FFXiMain.dll not ready for the 3D hooks yet");
+}
+
 static DWORD WINAPI install_thread(LPVOID)
 {
-    // 5 ms ticks: try_install returns at once until .text is unpacked, and the
-    // menu-buffer patch has to beat the renderer's setup. 12000 x 5 ms = 60 s.
+    // 5 ms ticks: try_install returns at once until .text is unpacked. The
+    // CreateDevice path is the guaranteed one; this covers anything that never
+    // reaches it. 12000 x 5 ms = 60 s.
     for (int t = 0; t < 12000; t++) {
-        if (try_install()) { InterlockedExchange(&g_running, 0); return 0; }
+        if (install_once()) { InterlockedExchange(&g_running, 0); return 0; }
         Sleep(5);
     }
     logf("[ffxi3d] gave up waiting for FFXiMain.dll's renderer code -- 3D stays the "
