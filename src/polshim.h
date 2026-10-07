@@ -832,6 +832,12 @@ int   regfix_enabled();
 // shows. apply=0 reports without writing. Returns titles registered, or -1 if it could
 // not even start. Independent of [regfix] enable.
 int   regfix_scan(char* out, size_t cch, int apply);
+// JongHoLow (content 0003, the PC recomp): register it beside the other titles so
+// the Viewer lists it and its patch check downloads it; remove takes it out of
+// the games menu (files kept). 1 done, 0 nothing to do, -1 refused/failed.
+int   jan_install(char* out, size_t cch);
+int   jan_remove(char* out, size_t cch);
+bool  jan_registered_folder(char* out, size_t cch);
 
 // sessionwatch.cpp -- notice when the auth-band SESSION socket dies.
 // Observation only: it never touches the socket or the return value.

@@ -1191,3 +1191,129 @@ void regfix_run(const wchar_t* ini)
     if (!g_sidecar[0]) sidecar_path(ini, g_sidecar, sizeof(g_sidecar));
     mirror_installfolder_to_base();
 }
+
+// ===========================================================================
+// JongHoLow (content id 0003) on PC: the static recompilation of Janhourou
+// that runs as a Viewer content module (ps2EntryRunner.dll, COM class
+// {D6EBF65E-...}). The settings window's "Install JongHoLow" registers it;
+// the files themselves arrive the way every title's do -- the Viewer's patch
+// check runs W2U/0003 before it creates the class, so the first launch from
+// the games menu downloads the whole install, and later versions update it.
+//
+// THIS IS THE ONE PLACE A CLASS IS REGISTERED BEFORE ITS SERVER IS ON DISK
+// (register_comclass refuses that, for good reason: "invisible" beats "visible
+// and fails on load"). Here the order is the Viewer's own: patch first, class
+// second, so the DLL is there by the time anything loads it. If the patch
+// fails, the Viewer says so before it ever reaches the class.
+// ===========================================================================
+static const char kJanClsid[]  = "{D6EBF65E-43B4-4D3C-9876-239538BD15B9}";
+static const char kJanClsidBare[] = "D6EBF65E-43B4-4D3C-9876-239538BD15B9";
+static const char kJanIid[]    = "6D365D27-4999-4BC5-AADF-513EF0E7B438";   // IPolContentsCom
+static const char kJanProgId[] = "Janhourou.Content.1";
+static const char kJanDll[]    = "ps2EntryRunner.dll";
+
+// Where it is registered now (InstallFolder\0003), "" if nowhere.
+bool jan_registered_folder(char* out, size_t cch)
+{
+    if (out && cch) *out = 0;
+    if (!resolve_reg() || !detect_hive()) return false;
+    char sub[256];
+    _snprintf_s(sub, sizeof(sub), _TRUNCATE, "%s\\InstallFolder", g_hive);
+    char tmp[MAX_PATH];
+    if (!read_sz_at(sub, "0003", tmp, sizeof(tmp)) || !tmp[0]) return false;
+    if (out && cch) strcpy_s(out, cch, tmp);
+    return true;
+}
+
+// Register JongHoLow and create its folder beside the other titles. Returns
+// 1 registered now, 0 already registered (out names where), -1 refused/failed.
+int jan_install(char* out, size_t cch)
+{
+    g_rep = out; g_repleft = cch;
+    if (out && cch) *out = 0;
+    if (!resolve_reg()) { rep("The registry could not be opened."); g_rep = NULL; return -1; }
+    sidecar_path(g_inipath, g_sidecar, sizeof(g_sidecar));
+    if (polshim_token_virtualized()) {
+        rep("The Viewer is not running as administrator, so the game could not be");
+        rep("registered. Start the Viewer as administrator and try again.");
+        logf("[jan] install REFUSED: token virtualization on");
+        g_rep = NULL; return -1;
+    }
+    if (!detect_hive()) {
+        rep("No PlayOnline Viewer installation was found to add JongHoLow to.");
+        g_rep = NULL; return -1;
+    }
+    char existing[MAX_PATH];
+    if (jan_registered_folder(existing, sizeof(existing))) {
+        rep("JongHoLow is already installed in %s.", existing);
+        g_rep = NULL; return 0;
+    }
+
+    char folder[MAX_PATH];
+    _snprintf_s(folder, sizeof(folder), _TRUNCATE, "%s\\JongHoLow", g_sqroot);
+    if (!CreateDirectoryA(folder, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        rep("Could not create %s (error %lu).", folder, GetLastError());
+        g_rep = NULL; return -1;
+    }
+    char dll[MAX_PATH];
+    _snprintf_s(dll, sizeof(dll), _TRUNCATE, "%s\\%s", folder, kJanDll);
+
+    char key[320];
+    bool ok = true;
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s", kJanClsid);
+    ok &= set_sz(key, "", "JongHoLow content module");
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", kJanClsid);
+    ok &= set_sz(key, "", dll);
+    ok &= set_sz(key, "ThreadingModel", "Apartment");
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s\\ProgID", kJanClsid);
+    ok &= set_sz(key, "", kJanProgId);
+    // The Viewer refuses a content class without a ProgID ("Content registry
+    // data is corrupted.", pol.exe 0x40f000 ProgIDFromCLSID).
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\%s", kJanProgId);
+    ok &= set_sz(key, "", "JongHoLow content module");
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\%s\\CLSID", kJanProgId);
+    ok &= set_sz(key, "", kJanClsid);
+
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\ContentsCLSID", g_hive);
+    ok &= set_sz(key, "0003", kJanClsidBare);
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\ContentsIID", g_hive);
+    ok &= set_sz(key, "0003", kJanIid);
+    // Last: the games menu lists a title once its install folder is known.
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\InstallFolder", g_hive);
+    ok &= set_sz(key, "0003", folder);
+
+    if (!ok) {
+        rep("Some registry values could not be written (error %lu).", GetLastError());
+        logf("[jan] install: registry write FAILED (%lu)", GetLastError());
+        g_rep = NULL; return -1;
+    }
+    rep("JongHoLow is installed in %s.", folder);
+    logf("[jan] installed: %s (hive %s)", folder, g_hive);
+    g_rep = NULL;
+    return 1;
+}
+
+// Unregister: the title leaves the games menu. The files stay (the person may
+// want their saves); the class keys stay too, harmless without the 0003 rows.
+int jan_remove(char* out, size_t cch)
+{
+    g_rep = out; g_repleft = cch;
+    if (out && cch) *out = 0;
+    if (!resolve_reg() || !detect_hive()) { rep("No PlayOnline Viewer installation was found."); g_rep = NULL; return -1; }
+    if (polshim_token_virtualized()) {
+        rep("The Viewer is not running as administrator, so nothing was changed.");
+        g_rep = NULL; return -1;
+    }
+    char folder[MAX_PATH];
+    if (!jan_registered_folder(folder, sizeof(folder))) { rep("JongHoLow is not installed."); g_rep = NULL; return 0; }
+    static const char* subs[] = { "InstallFolder", "ContentsCLSID", "ContentsIID" };
+    for (const char* s : subs) {
+        char key[256]; _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\%s", g_hive, s);
+        HKEY h;
+        if (rok(HKEY_LOCAL_MACHINE, key, 0, KEY_WRITE, &h) == ERROR_SUCCESS) { rdv(h, "0003"); rck(h); }
+    }
+    rep("JongHoLow was removed from the Viewer. Its files are still in %s.", folder);
+    logf("[jan] removed (files kept in %s)", folder);
+    g_rep = NULL;
+    return 1;
+}

@@ -455,6 +455,23 @@ static const ShimOption g_opts[] = {
     L"Loads a character file onto your account here.", false, OPTM_PRIVATE },
 
   // ==========================================================================
+  // JongHoLow (content 0003) on PC. Install registers it beside the other
+  // titles; the Viewer's own update then downloads it on first launch and keeps
+  // it current (regfix.cpp jan_install). [jan] language is read by the game
+  // module itself, from this same ini. Our server is the one that serves the
+  // game, so the rows are private-server only.
+  { NULL, NULL, NULL, OPT_GROUP, L"JongHoLow", L"JongHoLow", false, NULL },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Install JongHoLow...", L"jan_install", false,
+    L"Adds JongHoLow to the Viewer's games menu. It downloads the first time you start it.",
+    false, OPTM_PRIVATE },
+  { L"jan",       L"language",       L"en",   OPT_ENUM, L"Game text",
+    L"en=English|ja=Japanese (original)", false,
+    L"Takes effect the next time JongHoLow starts.", false, OPTM_PRIVATE },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Remove JongHoLow...", L"jan_remove", false,
+    L"Takes JongHoLow out of the games menu. Your saves and files are kept.",
+    false, OPTM_PRIVATE },
+
+  // ==========================================================================
   { NULL, NULL, NULL, OPT_GROUP, L"Display and window", L"Display and window", false, NULL },
   // THE ONE DISPLAY CONTROL (2026-09-08). Three rows used to share this decision --
   // d3d_windowed, d3d_windowed_except ("Titles left fullscreen") and d3d_borderless
