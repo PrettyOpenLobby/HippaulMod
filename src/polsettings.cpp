@@ -2488,8 +2488,13 @@ static void cats_fill(HWND cats)
     InvalidateRect(cats, NULL, TRUE);
 }
 
-// Ctrl+Shift+D in the settings window. Written at once rather than on Save: the
-// unlock is not a setting, and closing without saving must not undo it.
+// Ctrl+Shift+D in the settings window, or LB+RB+Y held for two seconds on a pad
+// (a Deck has no keyboard, and XInput cannot see its back grips). Written at once
+// rather than on Save: the unlock is not a setting, and closing without saving
+// must not undo it.
+#define CHANNEL_PAD_MASK  (0x0100 | 0x0200 | 0x8000)   // lb + rb + y
+#define CHANNEL_PAD_HOLD_MS 2000
+static bool pad_mask_down(WORD mask);
 static void settings_unlock_channel(HWND h)
 {
     int n = 0; const ShimOption* opts = shim_options(&n);
@@ -2925,7 +2930,22 @@ static void build_and_pump()
 
     MSG m;
     HWND lastfocus = NULL;
+    // The pad unlock is polled: XInput sends no messages. A thread timer, so it
+    // arrives in this loop with no window of its own.
+    if (!g_xiget) xinput_resolve();
+    UINT_PTR padtick = g_xiget ? SetTimer(NULL, 0, 100, NULL) : 0;
+    DWORD pad_held_since = 0;
     while (IsWindow(h) && GetMessageW(&m, NULL, 0, 0) > 0) {
+        if (padtick && m.message == WM_TIMER && m.hwnd == NULL && m.wParam == padtick) {
+            if (!pad_mask_down(CHANNEL_PAD_MASK)) pad_held_since = 0;
+            else if (!pad_held_since) pad_held_since = GetTickCount() | 1;
+            else if (pad_held_since != 1 &&
+                     GetTickCount() - pad_held_since >= CHANNEL_PAD_HOLD_MS) {
+                settings_unlock_channel(h);
+                pad_held_since = 1;          // once per hold; release to re-arm
+            }
+            continue;
+        }
         // ESC cancels the settings dialog too -- same reason as the report window: a
         // plain window gets no free ESC handling, and on a pad the title-bar X is not
         // a realistic target.
@@ -2948,6 +2968,7 @@ static void build_and_pump()
         HWND f = GetFocus();
         if (f != lastfocus) { lastfocus = f; pane_reveal(f); }
     }
+    if (padtick) KillTimer(NULL, padtick);
     g_pane = NULL;                       // destroyed with its parent
     logf("[settings] closed");
 }
