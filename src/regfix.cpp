@@ -1193,12 +1193,14 @@ void regfix_run(const wchar_t* ini)
 }
 
 // ===========================================================================
-// JongHoLow (content id 0003) on PC: the static recompilation of Janhourou
-// that runs as a Viewer content module (ps2EntryRunner.dll, COM class
-// {D6EBF65E-...}). The settings window's "Install JongHoLow" registers it;
-// the files themselves arrive the way every title's do -- the Viewer's patch
-// check runs W2U/0003 before it creates the class, so the first launch from
-// the games menu downloads the whole install, and later versions update it.
+// PC titles: static recompilations of PS2 titles that run as Viewer content
+// modules. JongHoLow (content id 0003, ps2EntryRunner.dll, COM class
+// {D6EBF65E-...}) and Dirge of Cerberus (content id 0010, doc_content.dll,
+// COM class {F09BAF05-...}, which starts doc_game64.exe beside it). The
+// settings window's Install buttons register them; the files themselves
+// arrive the way every title's do -- the Viewer's patch check runs W2U/<id>
+// before it creates the class, so the first launch from the games menu
+// downloads the whole install, and later versions update it.
 //
 // THIS IS THE ONE PLACE A CLASS IS REGISTERED BEFORE ITS SERVER IS ON DISK
 // (register_comclass refuses that, for good reason: "invisible" beats "visible
@@ -1206,114 +1208,152 @@ void regfix_run(const wchar_t* ini)
 // second, so the DLL is there by the time anything loads it. If the patch
 // fails, the Viewer says so before it ever reaches the class.
 // ===========================================================================
-static const char kJanClsid[]  = "{D6EBF65E-43B4-4D3C-9876-239538BD15B9}";
-static const char kJanClsidBare[] = "D6EBF65E-43B4-4D3C-9876-239538BD15B9";
-static const char kJanIid[]    = "6D365D27-4999-4BC5-AADF-513EF0E7B438";   // IPolContentsCom
-static const char kJanProgId[] = "Janhourou.Content.1";
-static const char kJanDll[]    = "ps2EntryRunner.dll";
+static const char kPolContentsIid[] = "6D365D27-4999-4BC5-AADF-513EF0E7B438";   // IPolContentsCom
 
-// Where it is registered now (InstallFolder\0003), "" if nowhere.
-bool jan_registered_folder(char* out, size_t cch)
+struct PcTitle {
+    const char* id;        // content id, the value name under the hive's keys
+    const char* name;      // what the messages call it
+    const char* folder;    // created under ...\SquareEnix
+    const char* clsid;     // with braces
+    const char* clsidBare; // ContentsCLSID wants it without
+    const char* progid;
+    const char* dll;
+    const char* tag;       // log prefix
+};
+
+static const PcTitle kPcTitles[] = {
+    { "0003", "JongHoLow", "JongHoLow",
+      "{D6EBF65E-43B4-4D3C-9876-239538BD15B9}", "D6EBF65E-43B4-4D3C-9876-239538BD15B9",
+      "Janhourou.Content.1", "ps2EntryRunner.dll", "jan" },
+    { "0010", "Dirge of Cerberus", "DirgeOfCerberus",
+      "{F09BAF05-DCE9-4659-954D-1B6BA8809F89}", "F09BAF05-DCE9-4659-954D-1B6BA8809F89",
+      "DirgeOfCerberus.Content.1", "doc_content.dll", "doc" },
+};
+
+static const PcTitle* pc_title(int which)
+{
+    return (which >= 0 && which < (int)_countof(kPcTitles)) ? &kPcTitles[which] : NULL;
+}
+
+// Where it is registered now (InstallFolder\<id>), "" if nowhere.
+bool pctitle_registered_folder(int which, char* out, size_t cch)
 {
     if (out && cch) *out = 0;
-    if (!resolve_reg() || !detect_hive()) return false;
+    const PcTitle* t = pc_title(which);
+    if (!t || !resolve_reg() || !detect_hive()) return false;
     char sub[256];
     _snprintf_s(sub, sizeof(sub), _TRUNCATE, "%s\\InstallFolder", g_hive);
     char tmp[MAX_PATH];
-    if (!read_sz_at(sub, "0003", tmp, sizeof(tmp)) || !tmp[0]) return false;
+    if (!read_sz_at(sub, t->id, tmp, sizeof(tmp)) || !tmp[0]) return false;
     if (out && cch) strcpy_s(out, cch, tmp);
     return true;
 }
 
-// Register JongHoLow and create its folder beside the other titles. Returns
+// Register the title and create its folder beside the other titles. Returns
 // 1 registered now, 0 already registered (out names where), -1 refused/failed.
-int jan_install(char* out, size_t cch)
+int pctitle_install(int which, char* out, size_t cch)
 {
     g_rep = out; g_repleft = cch;
     if (out && cch) *out = 0;
+    const PcTitle* t = pc_title(which);
+    if (!t) { g_rep = NULL; return -1; }
     if (!resolve_reg()) { rep("The registry could not be opened."); g_rep = NULL; return -1; }
     sidecar_path(g_inipath, g_sidecar, sizeof(g_sidecar));
     if (polshim_token_virtualized()) {
         rep("The Viewer is not running as administrator, so the game could not be");
         rep("registered. Start the Viewer as administrator and try again.");
-        logf("[jan] install REFUSED: token virtualization on");
+        logf("[%s] install REFUSED: token virtualization on", t->tag);
         g_rep = NULL; return -1;
     }
     if (!detect_hive()) {
-        rep("No PlayOnline Viewer installation was found to add JongHoLow to.");
+        rep("No PlayOnline Viewer installation was found to add %s to.", t->name);
         g_rep = NULL; return -1;
     }
     char existing[MAX_PATH];
-    if (jan_registered_folder(existing, sizeof(existing))) {
-        rep("JongHoLow is already installed in %s.", existing);
+    if (pctitle_registered_folder(which, existing, sizeof(existing))) {
+        rep("%s is already installed in %s.", t->name, existing);
         g_rep = NULL; return 0;
     }
 
     char folder[MAX_PATH];
-    _snprintf_s(folder, sizeof(folder), _TRUNCATE, "%s\\JongHoLow", g_sqroot);
+    _snprintf_s(folder, sizeof(folder), _TRUNCATE, "%s\\%s", g_sqroot, t->folder);
     if (!CreateDirectoryA(folder, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
         rep("Could not create %s (error %lu).", folder, GetLastError());
         g_rep = NULL; return -1;
     }
     char dll[MAX_PATH];
-    _snprintf_s(dll, sizeof(dll), _TRUNCATE, "%s\\%s", folder, kJanDll);
+    _snprintf_s(dll, sizeof(dll), _TRUNCATE, "%s\\%s", folder, t->dll);
+    char desc[128];
+    _snprintf_s(desc, sizeof(desc), _TRUNCATE, "%s content module", t->name);
 
     char key[320];
     bool ok = true;
-    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s", kJanClsid);
-    ok &= set_sz(key, "", "JongHoLow content module");
-    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", kJanClsid);
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s", t->clsid);
+    ok &= set_sz(key, "", desc);
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", t->clsid);
     ok &= set_sz(key, "", dll);
     ok &= set_sz(key, "ThreadingModel", "Apartment");
-    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s\\ProgID", kJanClsid);
-    ok &= set_sz(key, "", kJanProgId);
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s\\ProgID", t->clsid);
+    ok &= set_sz(key, "", t->progid);
     // The Viewer refuses a content class without a ProgID ("Content registry
     // data is corrupted.", pol.exe 0x40f000 ProgIDFromCLSID).
-    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\%s", kJanProgId);
-    ok &= set_sz(key, "", "JongHoLow content module");
-    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\%s\\CLSID", kJanProgId);
-    ok &= set_sz(key, "", kJanClsid);
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\%s", t->progid);
+    ok &= set_sz(key, "", desc);
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "SOFTWARE\\Classes\\%s\\CLSID", t->progid);
+    ok &= set_sz(key, "", t->clsid);
 
     _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\ContentsCLSID", g_hive);
-    ok &= set_sz(key, "0003", kJanClsidBare);
+    ok &= set_sz(key, t->id, t->clsidBare);
     _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\ContentsIID", g_hive);
-    ok &= set_sz(key, "0003", kJanIid);
+    ok &= set_sz(key, t->id, kPolContentsIid);
     // Last: the games menu lists a title once its install folder is known.
     _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\InstallFolder", g_hive);
-    ok &= set_sz(key, "0003", folder);
+    ok &= set_sz(key, t->id, folder);
 
     if (!ok) {
         rep("Some registry values could not be written (error %lu).", GetLastError());
-        logf("[jan] install: registry write FAILED (%lu)", GetLastError());
+        logf("[%s] install: registry write FAILED (%lu)", t->tag, GetLastError());
         g_rep = NULL; return -1;
     }
-    rep("JongHoLow is installed in %s.", folder);
-    logf("[jan] installed: %s (hive %s)", folder, g_hive);
+    rep("%s is installed in %s.", t->name, folder);
+    logf("[%s] installed: %s (hive %s)", t->tag, folder, g_hive);
     g_rep = NULL;
     return 1;
 }
 
 // Unregister: the title leaves the games menu. The files stay (the person may
-// want their saves); the class keys stay too, harmless without the 0003 rows.
-int jan_remove(char* out, size_t cch)
+// want their saves); the class keys stay too, harmless without the id's rows.
+int pctitle_remove(int which, char* out, size_t cch)
 {
     g_rep = out; g_repleft = cch;
     if (out && cch) *out = 0;
+    const PcTitle* t = pc_title(which);
+    if (!t) { g_rep = NULL; return -1; }
     if (!resolve_reg() || !detect_hive()) { rep("No PlayOnline Viewer installation was found."); g_rep = NULL; return -1; }
     if (polshim_token_virtualized()) {
         rep("The Viewer is not running as administrator, so nothing was changed.");
         g_rep = NULL; return -1;
     }
     char folder[MAX_PATH];
-    if (!jan_registered_folder(folder, sizeof(folder))) { rep("JongHoLow is not installed."); g_rep = NULL; return 0; }
+    if (!pctitle_registered_folder(which, folder, sizeof(folder))) { rep("%s is not installed.", t->name); g_rep = NULL; return 0; }
     static const char* subs[] = { "InstallFolder", "ContentsCLSID", "ContentsIID" };
     for (const char* s : subs) {
         char key[256]; _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\%s", g_hive, s);
         HKEY h;
-        if (rok(HKEY_LOCAL_MACHINE, key, 0, KEY_WRITE, &h) == ERROR_SUCCESS) { rdv(h, "0003"); rck(h); }
+        if (rok(HKEY_LOCAL_MACHINE, key, 0, KEY_WRITE, &h) == ERROR_SUCCESS) { rdv(h, t->id); rck(h); }
     }
-    rep("JongHoLow was removed from the Viewer. Its files are still in %s.", folder);
-    logf("[jan] removed (files kept in %s)", folder);
+    rep("%s was removed from the Viewer. Its files are still in %s.", t->name, folder);
+    logf("[%s] removed (files kept in %s)", t->tag, folder);
     g_rep = NULL;
     return 1;
 }
+
+const char* pctitle_name(int which)
+{
+    const PcTitle* t = pc_title(which);
+    return t ? t->name : "";
+}
+
+bool jan_registered_folder(char* out, size_t cch) { return pctitle_registered_folder(PCTITLE_JAN, out, cch); }
+int  jan_install(char* out, size_t cch)           { return pctitle_install(PCTITLE_JAN, out, cch); }
+int  jan_remove(char* out, size_t cch)            { return pctitle_remove(PCTITLE_JAN, out, cch); }

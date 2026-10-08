@@ -2216,38 +2216,48 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 if (!wcscmp(opts[i].choices, L"import_char"))      import_character_clicked(h);
                 else if (!wcscmp(opts[i].choices, L"report_now"))  polreport_open_from(h);
                 else if (!wcscmp(opts[i].choices, L"jan_install") ||
-                         !wcscmp(opts[i].choices, L"jan_remove")) {
-                    const bool install = !wcscmp(opts[i].choices, L"jan_install");
+                         !wcscmp(opts[i].choices, L"jan_remove") ||
+                         !wcscmp(opts[i].choices, L"doc_install") ||
+                         !wcscmp(opts[i].choices, L"doc_remove")) {
+                    // PC titles (regfix.cpp pctitle_install): the button's id
+                    // names the title and the action.
+                    const bool install = wcsstr(opts[i].choices, L"_install") != NULL;
+                    const int which = !wcsncmp(opts[i].choices, L"doc_", 4) ? PCTITLE_DOC : PCTITLE_JAN;
+                    const char* name = pctitle_name(which);
                     char where[MAX_PATH] = "";
-                    const bool present = jan_registered_folder(where, sizeof(where));
+                    const bool present = pctitle_registered_folder(which, where, sizeof(where));
                     if (install && present) {
                         wchar_t w[600];
                         _snwprintf_s(w, _countof(w), _TRUNCATE,
-                                     L"JongHoLow is already installed in\n%hs\n\n"
+                                     L"%hs is already installed in\n%hs\n\n"
                                      L"Start it from the Viewer's games menu. Updates download "
-                                     L"automatically when you start it.", where);
+                                     L"automatically when you start it.", name, where);
                         MessageBoxW(h, w, L"HippaulMod Settings", MB_OK | MB_ICONINFORMATION);
                         return 0;
                     }
                     if (!install && !present) {
-                        MessageBoxW(h, L"JongHoLow is not installed.", L"HippaulMod Settings",
-                                    MB_OK | MB_ICONINFORMATION);
+                        wchar_t w[200];
+                        _snwprintf_s(w, _countof(w), _TRUNCATE, L"%hs is not installed.", name);
+                        MessageBoxW(h, w, L"HippaulMod Settings", MB_OK | MB_ICONINFORMATION);
                         return 0;
                     }
-                    if (MessageBoxW(h, install
-                            ? L"Add JongHoLow to the Viewer?\n\nThe game downloads the first time "
+                    wchar_t ask[400];
+                    _snwprintf_s(ask, _countof(ask), _TRUNCATE, install
+                            ? L"Add %hs to the Viewer?\n\nThe game downloads the first time "
                               L"you start it from the games menu."
-                            : L"Take JongHoLow out of the Viewer's games menu?\n\nYour saves and "
-                              L"the game's files stay where they are.",
-                            L"HippaulMod Settings", MB_YESNO | MB_ICONQUESTION) != IDYES)
+                            : L"Take %hs out of the Viewer's games menu?\n\nYour saves and "
+                              L"the game's files stay where they are.", name);
+                    if (MessageBoxW(h, ask, L"HippaulMod Settings", MB_YESNO | MB_ICONQUESTION) != IDYES)
                         return 0;
                     char st[700] = "";
-                    const int r = install ? jan_install(st, sizeof(st)) : jan_remove(st, sizeof(st));
+                    const int r = install ? pctitle_install(which, st, sizeof(st))
+                                          : pctitle_remove(which, st, sizeof(st));
                     wchar_t w[800];
-                    _snwprintf_s(w, _countof(w), _TRUNCATE, L"%hs%hs", st,
-                                 (install && r > 0)
-                                   ? "\nRestart the Viewer, then choose JongHoLow from the games menu."
-                                   : "");
+                    if (install && r > 0)
+                        _snwprintf_s(w, _countof(w), _TRUNCATE,
+                                     L"%hs\nRestart the Viewer, then choose %hs from the games menu.", st, name);
+                    else
+                        _snwprintf_s(w, _countof(w), _TRUNCATE, L"%hs", st);
                     MessageBoxW(h, w, L"HippaulMod Settings",
                                 MB_OK | (r < 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
                 }

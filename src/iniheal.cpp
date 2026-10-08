@@ -467,8 +467,34 @@ static const ShimOption g_opts[] = {
   { L"jan",       L"language",       L"en",   OPT_ENUM, L"Game text",
     L"en=English|ja=Japanese (original)", false,
     L"Takes effect the next time JongHoLow starts.", false, OPTM_PRIVATE },
+  // [jan] window: how the game window opens, read by the game module from
+  // this ini (PS2X_WINDOW_MODE in the runtime). Default 1x, the size it has
+  // always opened at.
+  { L"jan",       L"window",         L"1x",   OPT_ENUM, L"Window",
+    L"dynamic=Fit to screen|1x=Window, 640 x 448|1.5x=Window, 960 x 672|2x=Window, 1280 x 896|"
+    L"3x=Window, 1920 x 1344|4x=Window, 2560 x 1792|borderless=Borderless fullscreen", false,
+    L"Fit to screen sizes the window to your monitor. Applies at the next start.",
+    false, OPTM_PRIVATE },
   { NULL, NULL, NULL, OPT_BUTTON, L"Remove JongHoLow...", L"jan_remove", false,
     L"Takes JongHoLow out of the games menu. Your saves and files are kept.",
+    false, OPTM_PRIVATE },
+
+  // ==========================================================================
+  // Dirge of Cerberus (content 0010) on PC, the same way as JongHoLow
+  // (regfix.cpp pctitle_install). [doc] window is read by its content module
+  // (doc_content.dll) when it starts the game. Developer rows until the
+  // W2U/0010 update carries the game itself.
+  { NULL, NULL, NULL, OPT_GROUP, L"Dirge of Cerberus", L"Dirge of Cerberus", true, NULL },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Install Dirge of Cerberus...", L"doc_install", true,
+    L"Adds Dirge of Cerberus to the Viewer's games menu. It downloads the first time you start it.",
+    false, OPTM_PRIVATE },
+  { L"doc",       L"window",         L"dynamic", OPT_ENUM, L"Window",
+    L"dynamic=Fit to screen|1x=Window, 640 x 448|1.5x=Window, 960 x 672|2x=Window, 1280 x 896|"
+    L"3x=Window, 1920 x 1344|4x=Window, 2560 x 1792|borderless=Borderless fullscreen", true,
+    L"Fit to screen sizes the window to your monitor. Applies at the next start.",
+    false, OPTM_PRIVATE },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Dirge of Cerberus...", L"doc_remove", true,
+    L"Takes Dirge of Cerberus out of the games menu. Your saves and files are kept.",
     false, OPTM_PRIVATE },
 
   // ==========================================================================

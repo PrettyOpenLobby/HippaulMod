@@ -838,6 +838,13 @@ int   regfix_scan(char* out, size_t cch, int apply);
 int   jan_install(char* out, size_t cch);
 int   jan_remove(char* out, size_t cch);
 bool  jan_registered_folder(char* out, size_t cch);
+// The same for any PC title by index: PCTITLE_JAN (0003, JongHoLow) or
+// PCTITLE_DOC (0010, Dirge of Cerberus).
+enum { PCTITLE_JAN = 0, PCTITLE_DOC = 1 };
+int         pctitle_install(int which, char* out, size_t cch);
+int         pctitle_remove(int which, char* out, size_t cch);
+bool        pctitle_registered_folder(int which, char* out, size_t cch);
+const char* pctitle_name(int which);
 
 // sessionwatch.cpp -- notice when the auth-band SESSION socket dies.
 // Observation only: it never touches the socket or the return value.
