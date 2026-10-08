@@ -2380,9 +2380,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     logf("[settings] [%ls] %ls: '%ls' -> '%ls'", o->sec, o->key, cur, now);
                     if (row_is_channel(*o)) {
                         // A url= left behind would keep pointing at the old feed.
-                        // Its row comes earlier in the table, so it has already been
-                        // compared this pass; blank its box too or the next Save
-                        // writes the old address back.
+                        // It moves to dev_url, which the dev channel uses when url=
+                        // is blank: the dev feed is private, and its address is the
+                        // only way back to it. url's row comes earlier in the table,
+                        // so it has already been compared this pass; blank its box
+                        // too or the next Save writes the old address back.
+                        wchar_t had[256] = L"";
+                        ini_str(L"autoupdate", L"url", L"", had, _countof(had), g_ini);
+                        if (had[0])
+                            WritePrivateProfileStringW(L"autoupdate", L"dev_url", had, g_ini);
                         WritePrivateProfileStringW(L"autoupdate", L"url", NULL, g_ini);
                         for (int j = 0; j < n && j < _countof(g_ctl); j++)
                             if (g_ctl[j] && opts[j].sec && opts[j].key &&

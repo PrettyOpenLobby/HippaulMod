@@ -793,6 +793,7 @@ static const ShimOption g_opts[] = {
     L"release=Release|dev=Development", false,
     L"Development builds change often and may break. Takes effect at the next check." },
   { L"settings",  L"channel_unlocked", L"0", OPT_HIDDEN, L"Update channel row unlocked (Ctrl+Shift+D)", NULL },
+  { L"autoupdate", L"dev_url",  L"",      OPT_HIDDEN, L"Development channel feed (blank = this server)", NULL },
   { L"autoupdate", L"delay_ms", L"10000", OPT_HIDDEN, L"Wait before checking (milliseconds)",            NULL },
   // Keep checking while the Viewer is open. A launch-only check missed anything
   // published during a session, and a POL session is an evening long.

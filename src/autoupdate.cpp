@@ -159,6 +159,7 @@ static int      g_interval_min = 60;
 static int      g_keep     = 3;
 static char     g_url[256] = "";
 static char     g_channel[16] = "";      // "release" | "dev"; see POLSHIM_UPDATE_BASE
+static char     g_dev_url[256] = "";     // the dev channel's feed when url= is blank
 static char     g_prompt[16] = "title";
 static HANDLE   g_thread  = NULL;
 static volatile LONG g_stop = 0;
@@ -442,7 +443,11 @@ bool shim_http_bases(char out_[2][256], const char* subpath)
 static bool base_urls(char out_[2][256])
 {
     if (_stricmp(g_url, "server") == 0) return shim_http_bases(out_, "shim/dist");
-    if (!g_url[0] && _stricmp(g_channel, "dev") == 0) return shim_http_bases(out_, "shim/dist");
+    if (!g_url[0] && _stricmp(g_channel, "dev") == 0) {
+        if (!g_dev_url[0] || _stricmp(g_dev_url, "server") == 0)
+            return shim_http_bases(out_, "shim/dist");
+        _snprintf_s(out_[0], 256, _TRUNCATE, "%s", g_dev_url); out_[1][0] = 0; return true;
+    }
     _snprintf_s(out_[0], 256, _TRUNCATE, "%s", g_url[0] ? g_url : POLSHIM_UPDATE_BASE);
     out_[1][0] = 0;
     return true;
@@ -450,9 +455,14 @@ static bool base_urls(char out_[2][256])
 
 static void read_channel(const wchar_t* ini)
 {
-    wchar_t w[32];
+    wchar_t w[256];
     ini_str(L"autoupdate", L"channel", POLSHIM_DEFAULT_CHANNEL, w, _countof(w), ini);
     WideCharToMultiByte(CP_ACP, 0, w, -1, g_channel, sizeof(g_channel), NULL, NULL);
+    // Where url= went when the channel was last changed (the settings Save moves
+    // it), so a private feed address survives a trip to release and back.
+    g_dev_url[0] = 0;
+    ini_str(L"autoupdate", L"dev_url", L"", w, _countof(w), ini);
+    if (w[0]) WideCharToMultiByte(CP_ACP, 0, w, -1, g_dev_url, sizeof(g_dev_url), NULL, NULL);
 }
 
 // ---------------------------------------------------------------------------
