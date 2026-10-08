@@ -158,6 +158,7 @@ static int      g_delay_ms = 10000;
 static int      g_interval_min = 60;
 static int      g_keep     = 3;
 static char     g_url[256] = "";
+static char     g_channel[16] = "";      // "release" | "dev"; see POLSHIM_UPDATE_BASE
 static char     g_prompt[16] = "title";
 static HANDLE   g_thread  = NULL;
 static volatile LONG g_stop = 0;
@@ -431,7 +432,8 @@ bool shim_http_bases(char out_[2][256], const char* subpath)
 }
 
 // autoupdate's own bases. [autoupdate] url= decides:
-//   (empty)   the project's latest GitHub release (POLSHIM_UPDATE_BASE)
+//   (empty)   [autoupdate] channel: release is the project's latest GitHub
+//             release (POLSHIM_UPDATE_BASE), dev the game server's /shim/dist
 //   server    the game server's own /shim/dist, both doors -- for an operator
 //             who hosts a build for their players
 //   <a URL>   exactly that
@@ -440,9 +442,17 @@ bool shim_http_bases(char out_[2][256], const char* subpath)
 static bool base_urls(char out_[2][256])
 {
     if (_stricmp(g_url, "server") == 0) return shim_http_bases(out_, "shim/dist");
+    if (!g_url[0] && _stricmp(g_channel, "dev") == 0) return shim_http_bases(out_, "shim/dist");
     _snprintf_s(out_[0], 256, _TRUNCATE, "%s", g_url[0] ? g_url : POLSHIM_UPDATE_BASE);
     out_[1][0] = 0;
     return true;
+}
+
+static void read_channel(const wchar_t* ini)
+{
+    wchar_t w[32];
+    ini_str(L"autoupdate", L"channel", POLSHIM_DEFAULT_CHANNEL, w, _countof(w), ini);
+    WideCharToMultiByte(CP_ACP, 0, w, -1, g_channel, sizeof(g_channel), NULL, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -1041,6 +1051,7 @@ void autoupdate_start(const wchar_t* ini, const wchar_t* self_path)
     wchar_t w[256];
     ini_str(L"autoupdate", L"url", L"", w, _countof(w), g_ini);
     if (w[0]) WideCharToMultiByte(CP_ACP, 0, w, -1, g_url, sizeof(g_url), NULL, NULL);
+    read_channel(g_ini);
     ini_str(L"autoupdate", L"prompt", L"title", w, _countof(w), g_ini);
     WideCharToMultiByte(CP_ACP, 0, w, -1, g_prompt, sizeof(g_prompt), NULL, NULL);
 
@@ -1053,7 +1064,8 @@ void autoupdate_start(const wchar_t* ini, const wchar_t* self_path)
     g_thread = CreateThread(NULL, 0, worker, NULL, 0, NULL);
     if (g_interval_min > 0)
         logf("[autoupdate] armed (first check in %d ms, then every %d min, "
-             "prompt=%s, keep=%d)", g_delay_ms, g_interval_min, g_prompt, g_keep);
+             "prompt=%s, keep=%d, channel=%s%s)", g_delay_ms, g_interval_min, g_prompt, g_keep,
+             g_channel, g_url[0] ? ", url set" : "");
     else
         logf("[autoupdate] armed (one check, in %d ms; interval_min=0, "
              "prompt=%s, keep=%d)", g_delay_ms, g_prompt, g_keep);
@@ -1089,6 +1101,7 @@ void autoupdate_reload(const wchar_t* ini)
     g_url[0] = 0;                     // overwrite wholesale; blank means "resolve"
     ini_str(L"autoupdate", L"url", L"", w, _countof(w), ini);
     if (w[0]) WideCharToMultiByte(CP_ACP, 0, w, -1, g_url, sizeof(g_url), NULL, NULL);
+    read_channel(ini);
     ini_str(L"autoupdate", L"prompt", L"title", w, _countof(w), ini);
     WideCharToMultiByte(CP_ACP, 0, w, -1, g_prompt, sizeof(g_prompt), NULL, NULL);
 
@@ -1105,8 +1118,8 @@ void autoupdate_reload(const wchar_t* ini)
         autoupdate_start(ini, g_self);
     }
     g_enable = enable;
-    logf("[reload] autoupdate: enable=%d interval_min=%d keep=%d prompt=%s "
+    logf("[reload] autoupdate: enable=%d interval_min=%d keep=%d prompt=%s channel=%s "
          "worker=%s (delay_ms is spent at startup, not re-read)",
-         g_enable, g_interval_min, g_keep, g_prompt,
+         g_enable, g_interval_min, g_keep, g_prompt, g_channel,
          g_thread ? "running" : "stopped");
 }

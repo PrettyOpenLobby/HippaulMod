@@ -38,6 +38,14 @@
 #ifndef POLSHIM_UPDATE_BASE
 #define POLSHIM_UPDATE_BASE "https://github.com/PrettyOpenLobby/HippaulMod/releases/latest/download"
 #endif
+// UPDATE CHANNELS. [autoupdate] channel picks the feed when url= is blank:
+//   release   the GitHub release above
+//   dev       the game server's own /shim/dist
+// The row that changes it is hidden until Ctrl+Shift+D is pressed in the settings
+// window, which then writes [settings] channel_unlocked=1 so it stays shown.
+#ifndef POLSHIM_DEFAULT_CHANNEL
+#define POLSHIM_DEFAULT_CHANNEL L"release"
+#endif
 
 #ifndef POLSHIM_VERSION
 #define POLSHIM_VERSION "0.2.0"

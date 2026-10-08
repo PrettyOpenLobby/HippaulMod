@@ -784,7 +784,15 @@ static const ShimOption g_opts[] = {
     L"HippaulMod itself. Game updates are PlayOnline's own and are untouched." },
   { L"autoupdate", L"prompt",   L"title", OPT_ENUM, L"Tell me when it updates",
     L"title=In the title bar|dialog=Pop up a message|off=Don't tell me", false, NULL },
-  { L"autoupdate", L"url",      L"",      OPT_TEXT, L"Update source (blank = this server)",  NULL },
+  // The raw override, now a developer row: players get the channel below instead.
+  { L"autoupdate", L"url",      L"",      OPT_TEXT, L"Update source override (blank = use the channel)", NULL, true },
+  // Drawn only once Ctrl+Shift+D has been pressed in this window on this install
+  // ([settings] channel_unlocked, below). Changing it on Save also clears url=, so
+  // a hand-set feed address cannot pin the machine to the old channel.
+  { L"autoupdate", L"channel",  POLSHIM_DEFAULT_CHANNEL, OPT_ENUM, L"Update channel",
+    L"release=Release|dev=Development", false,
+    L"Development builds change often and may break. Takes effect at the next check." },
+  { L"settings",  L"channel_unlocked", L"0", OPT_HIDDEN, L"Update channel row unlocked (Ctrl+Shift+D)", NULL },
   { L"autoupdate", L"delay_ms", L"10000", OPT_HIDDEN, L"Wait before checking (milliseconds)",            NULL },
   // Keep checking while the Viewer is open. A launch-only check missed anything
   // published during a session, and a POL session is an evening long.

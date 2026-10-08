@@ -144,6 +144,15 @@ static HWND     g_ctl[POLSET_MAX_ROWS];
 // them a position, so the toggle is a re-layout of controls that already exist,
 // the same operation the search box performs on every keystroke.
 static bool     g_show_dev = false;
+// The update-channel row is not a developer row: it stays out of sight until
+// Ctrl+Shift+D is pressed in this window, and the unlock is written straight to
+// [settings] channel_unlocked so it survives every later open.
+static bool     g_channel_unlocked = false;
+static bool row_is_channel(const ShimOption& o)
+{
+    return o.sec && o.key && !wcscmp(o.sec, L"autoupdate") && !wcscmp(o.key, L"channel");
+}
+static bool row_locked(const ShimOption& o) { return row_is_channel(o) && !g_channel_unlocked; }
 // Defined with the dialog builder; the live developer toggle (in the wndproc, above
 // it) has to rebuild the sidebar too.
 static void cats_fill(HWND cats);
@@ -619,6 +628,7 @@ static int layout_compute(bool show_dev, const wchar_t* filter, int cat,
         const ShimOption& o = opts[i];
         if (o.type == OPT_GROUP || o.type == OPT_HIDDEN) continue;
         if (o.dev && !show_dev) continue;
+        if (row_locked(o)) continue;
         // A setting for a game this computer does not have, or a button for a tool
         // that is not installed. See row_absent_here.
         if (row_absent_here(&o)) continue;
@@ -2368,6 +2378,18 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 if (wcscmp(now, cur) != 0) {
                     WritePrivateProfileStringW(o->sec, o->key, now, g_ini);
                     logf("[settings] [%ls] %ls: '%ls' -> '%ls'", o->sec, o->key, cur, now);
+                    if (row_is_channel(*o)) {
+                        // A url= left behind would keep pointing at the old feed.
+                        // Its row comes earlier in the table, so it has already been
+                        // compared this pass; blank its box too or the next Save
+                        // writes the old address back.
+                        WritePrivateProfileStringW(L"autoupdate", L"url", NULL, g_ini);
+                        for (int j = 0; j < n && j < _countof(g_ctl); j++)
+                            if (g_ctl[j] && opts[j].sec && opts[j].key &&
+                                !wcscmp(opts[j].sec, L"autoupdate") && !wcscmp(opts[j].key, L"url"))
+                                SetWindowTextW(g_ctl[j], L"");
+                        logf("[settings] update channel changed: [autoupdate] url cleared");
+                    }
                     if (change_needs_restart(o->sec, o->key, cur, now))
                         restart_note(o->label);
                     changed++;
@@ -2466,6 +2488,29 @@ static void cats_fill(HWND cats)
     InvalidateRect(cats, NULL, TRUE);
 }
 
+// Ctrl+Shift+D in the settings window. Written at once rather than on Save: the
+// unlock is not a setting, and closing without saving must not undo it.
+static void settings_unlock_channel(HWND h)
+{
+    int n = 0; const ShimOption* opts = shim_options(&n);
+    int row = -1;
+    for (int i = 0; i < n && i < _countof(g_ctl); i++)
+        if (row_is_channel(opts[i])) { row = i; break; }
+    if (row < 0 || !g_ctl[row]) return;
+    if (!g_channel_unlocked) {
+        WritePrivateProfileStringW(L"settings", L"channel_unlocked", L"1", g_ini);
+        g_channel_unlocked = true;
+        logf("[settings] update channel row unlocked (Ctrl+Shift+D)");
+    }
+    // Open the row's own category so it is on screen, whatever was selected.
+    g_cat = cat_of_row(opts, row);
+    cats_fill(GetDlgItem(h, IDC_CATS));
+    apply_filter(h, g_show_dev);
+    SetFocus(g_ctl[row]);
+    HWND sl = GetDlgItem(h, IDC_STATUS);
+    if (sl) SetWindowTextW(sl, L"Update channel shown. Pick one and press Save.");
+}
+
 static void build_and_pump()
 {
     static bool registered = false;
@@ -2509,6 +2554,7 @@ static void build_and_pump()
     // grow a row under the user's finger.
     g_show_dev = GetPrivateProfileIntW(L"settings", L"show_dev", 0, g_ini) != 0;
     const bool show_dev = g_show_dev;
+    g_channel_unlocked = GetPrivateProfileIntW(L"settings", L"channel_unlocked", 0, g_ini) != 0;
     // Hidden rows are healed into the ini but never drawn, so the window is sized to the
     // VISIBLE ones and each visible row gets the next slot -- indexing the layout by the
     // table position would leave a blank gap wherever a hidden key sits.
@@ -2840,7 +2886,7 @@ static void build_and_pump()
     // restart for nothing. It is the SAVE STATUS line now (IDC_STATUS): Save writes
     // its result here instead of into a modal box nobody can act on.
     HWND note = CreateWindowExW(0, L"STATIC", L"",
-                                WS_CHILD | WS_VISIBLE, LY_PAD, by + 8, LY_LBLW + 260, 18,
+                                WS_CHILD | WS_VISIBLE, LY_PAD, by + 8, cw - 2 * LY_PAD - 178, 18,
                                 h, (HMENU)IDC_STATUS, inst, NULL);
     SendMessageW(note, WM_SETFONT, (WPARAM)g_font, TRUE);
     HWND bs = CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
@@ -2884,6 +2930,12 @@ static void build_and_pump()
         // plain window gets no free ESC handling, and on a pad the title-bar X is not
         // a realistic target.
         if (m.message == WM_KEYDOWN && m.wParam == VK_ESCAPE) { DestroyWindow(h); break; }
+        // CTRL+SHIFT+D shows the update-channel row, for good on this install.
+        if (m.message == WM_KEYDOWN && m.wParam == 'D' &&
+            (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            settings_unlock_channel(h);
+            continue;
+        }
         // THE WHEEL GOES TO THE FOCUSED CONTROL, which is normally a checkbox that
         // does nothing with it and does not pass it on. Redirect it to the thing
         // that scrolls, or the wheel does nothing over most of the dialog.
