@@ -62,16 +62,73 @@ jobs:
             stage/
             HippaulMod.zip
 
+  # The Windows XP build (`build.bat xp`). The runner's Visual Studio has no XP
+  # toolset, so this adds the VS 2017 (v141) x86 tools and "C++ Windows XP
+  # Support", which brings the 7.1A SDK and the 10.0.10240 UCRT build.bat needs.
+  # Published as PolHook-xp.dll and PolShimSetup-xp.exe; the XP build's updater
+  # asks for exactly those names and never for PolHook.dll.
+  shim-xp:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: take the release version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          "POLSHIM_RELEASE_VERSION=$($env:GITHUB_REF_NAME.Substring(1))" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: add the XP toolset to Visual Studio
+        shell: pwsh
+        run: |
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vs = & "$installer\vswhere.exe" -latest -products * -property installationPath
+          $p = Start-Process -FilePath "$installer\setup.exe" -Wait -PassThru -ArgumentList @(
+            'modify', '--installPath', "`"$vs`"",
+            '--add', 'Microsoft.VisualStudio.Component.VC.v141.x86.x64',
+            '--add', 'Microsoft.VisualStudio.Component.WinXP',
+            '--quiet', '--norestart', '--nocache')
+          # 3010 = installed, reboot suggested; nothing here needs the reboot
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "VS installer exited $($p.ExitCode)" }
+      - name: build PolHook.dll and PolShimSetup.exe for Windows XP
+        shell: cmd
+        run: build.bat xp
+      - name: check the XP binaries import nothing XP lacks
+        run: python xpcheck.py build-xp\PolHook.dll build-xp\PolShimSetup.exe
+      # The same check must still FAIL on the normal build (Vista and later),
+      # or it has stopped seeing anything.
+      - name: check that the check can fail
+        shell: cmd
+        run: call build.bat && python xpcheck.py --expect-fail build\PolHook.dll
+      - name: stage the XP download set
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage-xp | Out-Null
+          Copy-Item build-xp\PolHook.dll stage-xp\PolHook-xp.dll
+          Copy-Item build-xp\PolShimSetup.exe stage-xp\PolShimSetup-xp.exe
+          $h = (Get-FileHash stage-xp\PolHook-xp.dll -Algorithm SHA256).Hash.ToLower()
+          "$h  PolHook-xp.dll" | Out-File -Encoding ascii -NoNewline stage-xp\PolHook-xp.dll.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hippaulmod-xp
+          path: stage-xp/
+
   release:
-    needs: [hygiene, shim]
+    needs: [hygiene, shim, shim-xp]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: hippaulmod
+      - uses: actions/download-artifact@v4
+        with:
+          name: hippaulmod-xp
+          path: stage-xp
       - name: name the zip after the tag
         run: mv HippaulMod.zip "HippaulMod-${GITHUB_REF_NAME}.zip"
+      - name: add the XP files to SHA256SUMS
+        run: |
+          cd stage-xp
+          sha256sum PolHook-xp.dll PolShimSetup-xp.exe >> ../stage/SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -84,4 +141,7 @@ jobs:
             stage/polshim.ini
             stage/README.md
             stage/SHA256SUMS
+            stage-xp/PolHook-xp.dll
+            stage-xp/PolHook-xp.dll.sha256
+            stage-xp/PolShimSetup-xp.exe
           generate_release_notes: true

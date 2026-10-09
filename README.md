@@ -34,7 +34,8 @@ is renamed, never modified or redistributed. Uninstall = rename it back.
 Every release on the repository's Releases page carries `PolShimSetup.exe`
 (the Windows installer), `PolHook.dll` with its `PolHook.dll.sha256`,
 `install.sh` and `Install-PolHookProxy.ps1`, the `polshim.ini` template, a
-`SHA256SUMS` file and a zip of the whole set. Every push to `main` also
+`SHA256SUMS` file and a zip of the whole set. The Windows XP build sits beside
+it as `PolShimSetup-xp.exe` and `PolHook-xp.dll` (see below). Every push to `main` also
 leaves the same set as a workflow artifact for anyone who wants the newest
 build before a release is cut.
 
@@ -62,6 +63,20 @@ to a new address, run the installer again.
 
 Settings live in `polshim.ini` next to `pol.exe`; the in-game dialog edits
 the same file. `[redirect] server=` is the only required value.
+
+## Windows XP
+
+The normal build needs Windows Vista or later. On XP, PlayOnline will not
+start at all with it installed, because `pol.exe` loads `PolHook.dll` before
+anything else runs. XP players install `PolShimSetup-xp.exe` instead. It is
+the same shim, built with the Visual Studio 2017 XP toolset and without SSE2
+instructions, so it also runs on a Pentium III or an Athlon XP.
+
+The XP build updates itself from `PolHook-xp.dll` in each release and never
+installs the normal `PolHook.dll`. XP cannot connect to GitHub on its own (it
+stops at TLS 1.0), so the XP build carries its own TLS client for that. If an
+update check fails with a certificate error, check that the PC's clock is set
+to the right date.
 
 ## Updates
 
@@ -125,9 +140,16 @@ including across restarts.
 ## Build
 
 `build.bat` with Visual Studio 2022 (x86 tools) produces `build\PolHook.dll`
-and `build\PolShimSetup.exe`. No third-party libraries; hooks, image
+and `build\PolShimSetup.exe`. The normal build uses no third-party libraries; hooks, image
 patching and the PNG writer are in-tree. CI builds every push on a Windows
 runner and publishes both artifacts.
+
+`build.bat xp` makes the Windows XP build in `build-xp\`. It needs two more
+components from the Visual Studio installer: "MSVC v141 - VS 2017 C++ x64/x86
+build tools" and "C++ Windows XP Support for VS 2017 (v141) tools". The XP
+build adds BearSSL (`third_party/bearssl`) for HTTPS. `python xpcheck.py
+build-xp\PolHook.dll` confirms a build imports nothing XP lacks; CI runs it on
+every push.
 
 ## What is not included
 
@@ -138,4 +160,5 @@ runner and publishes both artifacts.
 
 ## License
 
-AGPL-3.0 (see LICENSE).
+AGPL-3.0 (see LICENSE). `third_party/bearssl` is BearSSL 0.6 by Thomas Pornin,
+under the MIT licence in `third_party/bearssl/LICENSE.txt`.

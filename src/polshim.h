@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "xpcompat.h"   // legacy XP build only; empty otherwise
 
 #define POLSHIM_MAX_SLOTS   512
 #define POLSHIM_MAX_ARGS    8     // stack dwords captured per call
@@ -45,6 +46,52 @@
 // window, which then writes [settings] channel_unlocked=1 so it stays shown.
 #ifndef POLSHIM_DEFAULT_CHANNEL
 #define POLSHIM_DEFAULT_CHANNEL L"release"
+#endif
+// THE FILE EACH BUILD UPDATES FROM. Every feed (the GitHub release, a server's
+// /shim/dist, a url=) carries the XP build under its own name beside the normal
+// one. The normal PolHook.dll imports functions XP does not have, and pol.exe
+// imports PolHook.dll statically, so an XP install that took it would never start
+// the Viewer again. Its .sha256 is "<asset>.sha256".
+#ifndef POLSHIM_UPDATE_ASSET
+#ifdef POLSHIM_XP
+#define POLSHIM_UPDATE_ASSET "PolHook-xp.dll"
+#else
+#define POLSHIM_UPDATE_ASSET "PolHook.dll"
+#endif
+#endif
+
+#ifdef POLSHIM_XP
+// The second guard behind the file name: an XP build installs only an image that
+// is itself built for XP. The loader would refuse anything else on XP, but only
+// after the swap, when the Viewer can no longer start. The PE header says what
+// Windows an image was linked for (5.01 for build.bat xp, 6.00 for the normal
+// build), so a wrongly published file is caught before it touches the install.
+// Returns false with the reason in why.
+static inline bool shim_image_is_xp_ready(const BYTE* img, DWORD len, char* why, size_t cap)
+{
+    const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)img;
+    if (len < sizeof(*dos) || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 ||
+        (DWORD)dos->e_lfanew > len - sizeof(IMAGE_NT_HEADERS32)) {
+        _snprintf_s(why, cap, _TRUNCATE, "not a Windows DLL");
+        return false;
+    }
+    const IMAGE_NT_HEADERS32* nt = (const IMAGE_NT_HEADERS32*)(img + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+        _snprintf_s(why, cap, _TRUNCATE, "not a 32-bit x86 DLL");
+        return false;
+    }
+    const IMAGE_OPTIONAL_HEADER32* o = &nt->OptionalHeader;
+    DWORD os  = ((DWORD)o->MajorOperatingSystemVersion << 16) | o->MinorOperatingSystemVersion;
+    DWORD sub = ((DWORD)o->MajorSubsystemVersion << 16) | o->MinorSubsystemVersion;
+    DWORD need = os > sub ? os : sub;
+    if (need > 0x50001) {
+        _snprintf_s(why, cap, _TRUNCATE, "built for Windows %u.%02u, not XP",
+                    (unsigned)(need >> 16), (unsigned)(need & 0xFFFF));
+        return false;
+    }
+    return true;
+}
 #endif
 
 #ifndef POLSHIM_VERSION

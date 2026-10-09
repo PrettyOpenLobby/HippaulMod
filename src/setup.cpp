@@ -38,6 +38,7 @@
 #include <string.h>
 
 #include "polshim.h"        // POLSHIM_VERSION / POLSHIM_BUILD -- one source of truth
+#include "tlsget.h"
 
 #ifndef STATUS_SUCCESS
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
@@ -254,6 +255,15 @@ static bool sha256_hex(const BYTE* data, DWORD len, char out_[65])
 // -----------------------------------------------------------------------------
 static BYTE* http_get(const char* url, DWORD* out_len, DWORD cap)
 {
+#ifdef POLSHIM_XP
+    // XP's WinINet cannot reach a TLS 1.2 host such as GitHub; see tlsget.cpp.
+    if (_strnicmp(url, "https://", 8) == 0) {
+        char err[200];
+        BYTE* b = tls_https_get(url, out_len, cap, "PolShimSetup/" POLSHIM_VERSION, err, sizeof(err));
+        if (!b) info("Download failed: %s", err);
+        return b;
+    }
+#endif
     HINTERNET net = InternetOpenA("PolShimSetup/" POLSHIM_VERSION,
                                   INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!net) return NULL;
@@ -648,7 +658,7 @@ int main(int argc, char** argv)
         }
         for (int t = 0; t < ntry; t++) {
             char u[600]; DWORD n = 0;
-            _snprintf_s(u, sizeof(u), _TRUNCATE, "%s/PolHook.dll.sha256", tried[t]);
+            _snprintf_s(u, sizeof(u), _TRUNCATE, "%s/" POLSHIM_UPDATE_ASSET ".sha256", tried[t]);
             BYTE* sha = http_get(u, &n, 4096);
             if (!sha && t + 1 < ntry) { free(sha); continue; }   // that door is shut; try the next
             strncpy_s(update_url, tried[t], _TRUNCATE);
@@ -658,11 +668,19 @@ int main(int argc, char** argv)
                 if (_stricmp(want, have) == 0) {
                     info("Server has the same HippaulMod as this installer -- using the built-in copy.");
                 } else {
-                    _snprintf_s(u, sizeof(u), _TRUNCATE, "%s/PolHook.dll", update_url);
+                    _snprintf_s(u, sizeof(u), _TRUNCATE, "%s/" POLSHIM_UPDATE_ASSET, update_url);
                     DWORD dn = 0;
                     BYTE* got = http_get(u, &dn, 16 * 1024 * 1024);
                     char gh[65] = "";
-                    if (got && dn > 4096 && sha256_hex(got, dn, gh) && _stricmp(gh, want) == 0) {
+                    bool fits = true;
+#ifdef POLSHIM_XP
+                    char why[96] = "";
+                    if (got && !shim_image_is_xp_ready(got, dn, why, sizeof(why))) {
+                        warn("The server's HippaulMod is %s -- installing the built-in XP copy instead.", why);
+                        fits = false;
+                    }
+#endif
+                    if (fits && got && dn > 4096 && sha256_hex(got, dn, gh) && _stricmp(gh, want) == 0) {
                         downloaded = got;
                         dll = got; dll_len = dn;
                         // "the server's" rather than "a newer": we compare hashes, not
@@ -672,7 +690,8 @@ int main(int argc, char** argv)
                         ok("Using the server's HippaulMod (%lu bytes, hash verified).", dn);
                     } else {
                         free(got);
-                        warn("Server copy did not verify -- installing the built-in HippaulMod instead.");
+                        if (fits)
+                            warn("Server copy did not verify -- installing the built-in HippaulMod instead.");
                     }
                 }
             } else {

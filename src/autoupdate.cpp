@@ -38,6 +38,7 @@
 //      file already matches the server and we must do nothing. Comparing against
 //      the RUNNING build would re-download it on every launch forever.
 //   2. fetch <base>/PolHook.dll.sha256, compare. Equal -> done, nothing fetched.
+//      (The XP build fetches PolHook-xp.dll instead; see POLSHIM_UPDATE_ASSET.)
 //   3. fetch <base>/PolHook.dll and verify it against the hash we were just told.
 //      A body that does not match is a truncated or tampered download and is
 //      dropped -- this is the only integrity check in the chain, because the
@@ -109,6 +110,7 @@
 #include <wininet.h>
 #include <bcrypt.h>
 #include <ctype.h>
+#include "tlsget.h"
 
 #ifndef STATUS_SUCCESS
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
@@ -272,6 +274,16 @@ static bool write_all_w(const wchar_t* path, const void* data, DWORD len)
 
 BYTE* shim_http_get(const char* url, DWORD* out_len, DWORD cap)
 {
+#ifdef POLSHIM_XP
+    // XP's WinINet stops at TLS 1.0 and GitHub needs 1.2, so https:// goes through
+    // the build's own TLS client (tlsget.cpp). http:// stays on WinINet below.
+    if (_strnicmp(url, "https://", 8) == 0) {
+        char err[200];
+        BYTE* b = tls_https_get(url, out_len, cap, "PolShim/" POLSHIM_VERSION, err, sizeof(err));
+        if (!b) logf("[https] %s: %s", url, err);
+        return b;
+    }
+#endif
     HINTERNET net = InternetOpenA("PolShim/" POLSHIM_VERSION,
                                   INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!net) return NULL;
@@ -685,7 +697,7 @@ static bool check_once()
     for (int b = 0; b < 2 && !g_stop; b++) {
         if (!bases[b][0]) continue;
         char url[320];
-        _snprintf_s(url, sizeof(url), _TRUNCATE, "%s/PolHook.dll.sha256", bases[b]);
+        _snprintf_s(url, sizeof(url), _TRUNCATE, "%s/" POLSHIM_UPDATE_ASSET ".sha256", bases[b]);
         DWORD n = 0;
         BYTE* sha = shim_http_get(url, &n, 4096);
         if (!sha) continue;
@@ -741,7 +753,7 @@ static bool check_once()
 
         logf("[autoupdate] %s advertises %.12s, we have %.12s -- fetching",
              bases[b], want, havehash);
-        _snprintf_s(url, sizeof(url), _TRUNCATE, "%s/PolHook.dll", bases[b]);
+        _snprintf_s(url, sizeof(url), _TRUNCATE, "%s/" POLSHIM_UPDATE_ASSET, bases[b]);
         DWORD dl = 0;
         BYTE* img = shim_http_get(url, &dl, 16 * 1024 * 1024);
         if (!img) { logf("[autoupdate] download failed"); continue; }
@@ -755,6 +767,21 @@ static bool check_once()
             return false;      // a truncated download is worth one more try later
         }
 
+#ifdef POLSHIM_XP
+        {
+            char why[96];
+            if (!shim_image_is_xp_ready(img, dl, why, sizeof(why))) {
+                // Remembered like a backwards build: the same bytes get the same
+                // answer, so one 64-byte GET per interval until a new publish.
+                logf("[autoupdate] REFUSED: %s offers an image %s -- installing it "
+                     "would stop the Viewer from starting on this PC. Nothing installed.",
+                     bases[b], why);
+                strcpy_s(refused, sizeof(refused), want);
+                free(img);
+                return false;
+            }
+        }
+#endif
         int newbuild = build_of_image(img, dl);
         if (newbuild >= 0 && newbuild < POLSHIM_BUILD) {
             // Strictly LOWER than the RUNNING build only. Two deliberate

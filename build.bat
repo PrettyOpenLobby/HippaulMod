@@ -26,11 +26,55 @@ exit /b 1
 :have_vcvars
 echo [+] using "%VCVARS%"
 
+rem `build.bat xp` makes the legacy build for Windows XP into build-xp\. It needs the
+rem VS 2017 (v141) x86 tools and "C++ Windows XP Support" from the VS installer. The
+rem headers come from the 7.1A SDK, and the static CRT from the 10.0.10240 UCRT,
+rem the last one that does not import Vista-only kernel32 functions directly. Newer
+rem UCRTs do, and pol.exe statically imports PolHook.dll, so a single unresolved
+rem import on XP stops the Viewer from starting at all. /arch:IA32 because the
+rem default SSE2 code faults on a Pentium III or Athlon XP.
+set "OUTDIR=build"
+set "XPDEFS="
+set "XPLINK="
+set "XPEXE="
+set "XPSRC="
+if /i not "%~1"=="xp" goto :vcvars_default
+call "%VCVARS%" x86 -vcvars_ver=14.16 >nul
+if errorlevel 1 ( echo [!] the v141 x86 tools are not installed & exit /b 1 )
+set "KITS=%ProgramFiles(x86)%\Windows Kits\10"
+set "SDK71=%ProgramFiles(x86)%\Microsoft SDKs\Windows\v7.1A"
+if not exist "%SDK71%\Include\Windows.h" ( echo [!] the 7.1A SDK ^(C++ Windows XP Support^) is not installed & exit /b 1 )
+if not exist "%KITS%\Lib\10.0.10240.0\ucrt\x86\libucrt.lib" ( echo [!] the 10.0.10240 UCRT is not installed & exit /b 1 )
+set "INCLUDE=%VCToolsInstallDir%include;%KITS%\Include\10.0.10240.0\ucrt;%SDK71%\Include"
+rem The current SDK's um dir goes LAST, only for libraries 7.1A lacks (dxguid.lib is
+rem GUID data and imports nothing). Every import library 7.1A has is found first.
+set "LIB=%VCToolsInstallDir%lib\x86;%KITS%\Lib\10.0.10240.0\ucrt\x86;%SDK71%\Lib;%KITS%\Lib\%WindowsSDKLibVersion%um\x86"
+set "OUTDIR=build-xp"
+set "XPDEFS=/arch:IA32 /Zc:threadSafeInit- /D_USING_V110_SDK71_ /D_WIN32_WINNT=0x0501 /DWINVER=0x0501 /DPOLSHIM_XP=1 /I..\third_party\bearssl\inc"
+set "XPLINK=/SUBSYSTEM:WINDOWS,5.01 psapi.lib"
+set "XPEXE=/SUBSYSTEM:CONSOLE,5.01 ws2_32.lib"
+rem XP's WinINet cannot do TLS 1.2, so both binaries carry BearSSL for https://
+rem (src\tlsget.cpp, trusted roots in src\tlsroots.c). Built once into bearssl.lib.
+set "XPSRC=..\src\tlsget.cpp ..\src\tlsroots.c bearssl.lib"
+goto :vcvars_done
+:vcvars_default
 call "%VCVARS%" x86 >nul
 if errorlevel 1 exit /b 1
+:vcvars_done
 
-if not exist "%~dp0build" mkdir "%~dp0build"
-pushd "%~dp0build"
+if not exist "%~dp0%OUTDIR%" mkdir "%~dp0%OUTDIR%"
+pushd "%~dp0%OUTDIR%"
+
+if not defined XPSRC goto :no_bearssl
+if exist bearssl.lib goto :no_bearssl
+echo [+] building BearSSL ^(once; delete build-xp\bearssl.lib to rebuild^)
+if not exist bearssl-obj mkdir bearssl-obj
+(for /r "%~dp0third_party\bearssl\src" %%F in (*.c) do @echo "%%F") > bearssl-src.txt
+cl /nologo /c /MT /O2 /W1 %XPDEFS% /I..\third_party\bearssl\src /Fo:bearssl-obj\ @bearssl-src.txt >bearssl-build.txt
+if errorlevel 1 ( type bearssl-build.txt & popd & echo [!] BearSSL build failed & exit /b 1 )
+lib /nologo /out:bearssl.lib bearssl-obj\*.obj
+if errorlevel 1 ( popd & echo [!] BearSSL lib failed & exit /b 1 )
+:no_bearssl
 
 rem PolHook.dll is a PROXY of the Viewer's own PolHook.dll, which pol.exe STATICALLY
 rem imports -- so pol.exe loads the whole shim itself, no launcher and no admin.
@@ -51,13 +95,13 @@ rem The forwarders name PolHook_orig.dll but do NOT need it present to LINK (a
 rem forwarder is a string resolved at load time), so this builds standalone.
 rc /nologo /fo PolHook.res ..\PolHook.rc
 if errorlevel 1 ( popd & echo [!] PolHook.rc compile failed & exit /b 1 )
-cl /nologo /LD /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS %RELDEFS% ^
-   %SHIMSRC% PolHook.res /Fe:PolHook.dll ^
-   /link /DEF:..\PolHook.def %SHIMLIBS%
+cl /nologo /LD /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS %RELDEFS% %XPDEFS% ^
+   %SHIMSRC% %XPSRC% PolHook.res /Fe:PolHook.dll ^
+   /link /DEF:..\PolHook.def %SHIMLIBS% %XPLINK%
 
 set RC=%ERRORLEVEL%
 if %RC% NEQ 0 ( popd & echo [!] PolHook proxy build failed & exit /b %RC% )
-echo [+] built %~dp0build\PolHook.dll
+echo [+] built %~dp0%OUTDIR%\PolHook.dll
 
 rem One-file Windows installer. setup.rc embeds PolHook.dll (from THIS build dir --
 rem hence built last, after the proxy exists) plus the shipping ini template
@@ -66,12 +110,12 @@ rem against its payload. The manifest is requireAdministrator: the swap writes i
 rem Program Files. /I ..\src lets rc find setup.manifest and buildnum.h.
 rc /nologo /I ..\src /fo setup.res ..\setup.rc
 if errorlevel 1 ( popd & echo [!] setup.rc compile failed & exit /b 1 )
-cl /nologo /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS %RELDEFS% ^
-   ..\src\setup.cpp ..\src\polfiletxt.cpp setup.res /Fe:PolShimSetup.exe ^
-   /link kernel32.lib user32.lib advapi32.lib wininet.lib bcrypt.lib /MANIFEST:NO
+cl /nologo /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS %RELDEFS% %XPDEFS% ^
+   ..\src\setup.cpp ..\src\polfiletxt.cpp %XPSRC% setup.res /Fe:PolShimSetup.exe ^
+   /link kernel32.lib user32.lib advapi32.lib wininet.lib bcrypt.lib /MANIFEST:NO %XPEXE%
 
 set RC=%ERRORLEVEL%
 popd
 if %RC% NEQ 0 ( echo [!] PolShimSetup build failed & exit /b %RC% )
-echo [+] built %~dp0build\PolShimSetup.exe
+echo [+] built %~dp0%OUTDIR%\PolShimSetup.exe
 exit /b 0
