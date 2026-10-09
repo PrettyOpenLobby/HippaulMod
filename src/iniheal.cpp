@@ -1118,27 +1118,27 @@ static const ShimOption g_opts[] = {
 
   // Install from nothing (regfix.cpp setitle_install): register the title as a
   // stub, and the Viewer's own update downloads the game on its first start.
-  // Developer rows until a from-nothing install has been seen working per title.
-  { NULL, NULL, NULL, OPT_GROUP, L"Install Fantasy Earth", NULL, true,
+  // Seen working end to end for all three on 2026-10-08 (fresh Wine prefix, prod).
+  { NULL, NULL, NULL, OPT_GROUP, L"Install Fantasy Earth", NULL, false,
     L"Downloads the whole game the first time you start it (about 1.4 GB).",
     false, OPTM_PRIVATE, L"FE_Client.dll" },
-  { NULL, NULL, NULL, OPT_BUTTON, L"Install Fantasy Earth...", L"setitle_install:0011", true, NULL,
+  { NULL, NULL, NULL, OPT_BUTTON, L"Install Fantasy Earth...", L"setitle_install:0011", false, NULL,
     false, OPTM_PRIVATE },
-  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Fantasy Earth...", L"setitle_remove:0011", true, NULL,
+  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Fantasy Earth...", L"setitle_remove:0011", false, NULL,
     false, OPTM_PRIVATE },
-  { NULL, NULL, NULL, OPT_GROUP, L"Install Front Mission Online", NULL, true,
+  { NULL, NULL, NULL, OPT_GROUP, L"Install Front Mission Online", NULL, false,
     L"Downloads the whole game the first time you start it (about 3.7 GB).",
     false, OPTM_PRIVATE, L"FrontMissionOnline.dll" },
-  { NULL, NULL, NULL, OPT_BUTTON, L"Install Front Mission Online...", L"setitle_install:0004", true, NULL,
+  { NULL, NULL, NULL, OPT_BUTTON, L"Install Front Mission Online...", L"setitle_install:0004", false, NULL,
     false, OPTM_PRIVATE },
-  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Front Mission Online...", L"setitle_remove:0004", true, NULL,
+  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Front Mission Online...", L"setitle_remove:0004", false, NULL,
     false, OPTM_PRIVATE },
-  { NULL, NULL, NULL, OPT_GROUP, L"Install Tetra Master", NULL, true,
+  { NULL, NULL, NULL, OPT_GROUP, L"Install Tetra Master", NULL, false,
     L"Downloads the whole game the first time you start it.",
     false, OPTM_PRIVATE, L"TM.dll" },
-  { NULL, NULL, NULL, OPT_BUTTON, L"Install Tetra Master...", L"setitle_install:0002", true, NULL,
+  { NULL, NULL, NULL, OPT_BUTTON, L"Install Tetra Master...", L"setitle_install:0002", false, NULL,
     false, OPTM_PRIVATE },
-  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Tetra Master...", L"setitle_remove:0002", true, NULL,
+  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Tetra Master...", L"setitle_remove:0002", false, NULL,
     false, OPTM_PRIVATE },
 
   { NULL, NULL, NULL, OPT_GROUP, L"Final Fantasy XI's own settings", NULL, false,
