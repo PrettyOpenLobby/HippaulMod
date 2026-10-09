@@ -67,8 +67,10 @@ jobs:
   # Support", which brings the 7.1A SDK and the 10.0.10240 UCRT build.bat needs.
   # Published as PolHook-xp.dll and PolShimSetup-xp.exe; the XP build's updater
   # asks for exactly those names and never for PolHook.dll.
+  # windows-2022, not -latest: the newer image's Visual Studio (18) accepts the
+  # XP component and quietly installs nothing.
   shim-xp:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - name: take the release version from the tag
@@ -88,6 +90,15 @@ jobs:
             '--quiet', '--norestart', '--nocache')
           # 3010 = installed, reboot suggested; nothing here needs the reboot
           if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "VS installer exited $($p.ExitCode)" }
+          # The installer reports success for components it skipped, so look.
+          $need = @(
+            "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.1A\Include\Windows.h",
+            "${env:ProgramFiles(x86)}\Windows Kits\10\Lib\10.0.10240.0\ucrt\x86\libucrt.lib")
+          $need += Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Where-Object Name -like '14.16.*' |
+                   Select-Object -First 1 | ForEach-Object { $_.FullName }
+          if ($need.Count -lt 3) { throw "the v141 (14.16) tools were not installed under $vs" }
+          foreach ($f in $need) { if (-not (Test-Path $f)) { throw "missing after install: $f" } }
+          "XP toolset present under $vs"
       - name: build PolHook.dll and PolShimSetup.exe for Windows XP
         shell: cmd
         run: build.bat xp
