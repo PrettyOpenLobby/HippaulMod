@@ -853,6 +853,13 @@ int         pctitle_install(int which, char* out, size_t cch);
 int         pctitle_remove(int which, char* out, size_t cch);
 bool        pctitle_registered_folder(int which, char* out, size_t cch);
 const char* pctitle_name(int which);
+// SE's own titles installed from nothing (regfix.cpp setitle_install): "0002"
+// Tetra Master, "0004" Front Mission Online, "0011" Fantasy Earth. Registers the
+// title as a stub; the Viewer's patch check downloads the game on first launch.
+int         setitle_install(const char* id, char* out, size_t cch);
+int         setitle_remove(const char* id, char* out, size_t cch);
+bool        setitle_registered_folder(const char* id, char* out, size_t cch);
+const char* setitle_name(const char* id);
 
 // sessionwatch.cpp -- notice when the auth-band SESSION socket dies.
 // Observation only: it never touches the socket or the return value.

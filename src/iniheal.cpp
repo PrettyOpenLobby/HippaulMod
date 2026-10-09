@@ -1116,6 +1116,31 @@ static const ShimOption g_opts[] = {
     false, OPTM_ANY, L"TM.dll" },
   { NULL, NULL, NULL, OPT_BUTTON, L"Open Tetra Master Config...", L"cfgapp:Tetra Master", false, NULL },
 
+  // Install from nothing (regfix.cpp setitle_install): register the title as a
+  // stub, and the Viewer's own update downloads the game on its first start.
+  // Developer rows until a from-nothing install has been seen working per title.
+  { NULL, NULL, NULL, OPT_GROUP, L"Install Fantasy Earth", NULL, true,
+    L"Downloads the whole game the first time you start it (about 1.4 GB).",
+    false, OPTM_PRIVATE, L"FE_Client.dll" },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Install Fantasy Earth...", L"setitle_install:0011", true, NULL,
+    false, OPTM_PRIVATE },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Fantasy Earth...", L"setitle_remove:0011", true, NULL,
+    false, OPTM_PRIVATE },
+  { NULL, NULL, NULL, OPT_GROUP, L"Install Front Mission Online", NULL, true,
+    L"Downloads the whole game the first time you start it (about 3.7 GB).",
+    false, OPTM_PRIVATE, L"FrontMissionOnline.dll" },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Install Front Mission Online...", L"setitle_install:0004", true, NULL,
+    false, OPTM_PRIVATE },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Front Mission Online...", L"setitle_remove:0004", true, NULL,
+    false, OPTM_PRIVATE },
+  { NULL, NULL, NULL, OPT_GROUP, L"Install Tetra Master", NULL, true,
+    L"Downloads the whole game the first time you start it.",
+    false, OPTM_PRIVATE, L"TM.dll" },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Install Tetra Master...", L"setitle_install:0002", true, NULL,
+    false, OPTM_PRIVATE },
+  { NULL, NULL, NULL, OPT_BUTTON, L"Remove Tetra Master...", L"setitle_remove:0002", true, NULL,
+    false, OPTM_PRIVATE },
+
   { NULL, NULL, NULL, OPT_GROUP, L"Final Fantasy XI's own settings", NULL, false,
     L"Resolution, sound, mip and bump mapping, the opening movie. FFXI stores these "
     L"under numbered names, so its own tool is the only place they have labels.",

@@ -2271,6 +2271,47 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     MessageBoxW(h, w, L"HippaulMod Settings",
                                 MB_OK | (r < 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
                 }
+                else if (action_is(opts[i].choices, L"setitle_install", NULL, 0) ||
+                         action_is(opts[i].choices, L"setitle_remove", NULL, 0)) {
+                    // SE's own titles from nothing (regfix.cpp setitle_install). The
+                    // argument is the content id.
+                    char id[16] = "";
+                    const bool install = action_is(opts[i].choices, L"setitle_install", id, sizeof(id));
+                    if (!install) action_is(opts[i].choices, L"setitle_remove", id, sizeof(id));
+                    const char* name = setitle_name(id);
+                    char where[MAX_PATH] = "";
+                    const bool present = setitle_registered_folder(id, where, sizeof(where));
+                    wchar_t w[800];
+                    if (install && present) {
+                        _snwprintf_s(w, _countof(w), _TRUNCATE,
+                                     L"%hs is already installed in\n%hs\n\n"
+                                     L"Start it from the Viewer's games menu.", name, where);
+                        MessageBoxW(h, w, L"HippaulMod Settings", MB_OK | MB_ICONINFORMATION);
+                        return 0;
+                    }
+                    if (!install && !present) {
+                        _snwprintf_s(w, _countof(w), _TRUNCATE, L"%hs is not installed.", name);
+                        MessageBoxW(h, w, L"HippaulMod Settings", MB_OK | MB_ICONINFORMATION);
+                        return 0;
+                    }
+                    _snwprintf_s(w, _countof(w), _TRUNCATE, install
+                            ? L"Add %hs to the Viewer?\n\nThe whole game downloads the first "
+                              L"time you start it from the games menu."
+                            : L"Take %hs out of the Viewer's games menu?\n\nThe game's files "
+                              L"stay where they are.", name);
+                    if (MessageBoxW(h, w, L"HippaulMod Settings", MB_YESNO | MB_ICONQUESTION) != IDYES)
+                        return 0;
+                    char st[700] = "";
+                    const int r = install ? setitle_install(id, st, sizeof(st))
+                                          : setitle_remove(id, st, sizeof(st));
+                    if (install && r > 0)
+                        _snwprintf_s(w, _countof(w), _TRUNCATE,
+                                     L"%hs\nRestart the Viewer, then choose %hs from the games menu.", st, name);
+                    else
+                        _snwprintf_s(w, _countof(w), _TRUNCATE, L"%hs", st);
+                    MessageBoxW(h, w, L"HippaulMod Settings",
+                                MB_OK | (r < 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
+                }
                 else if (!wcscmp(opts[i].choices, L"padmap"))
                     SendMessageW(h, WM_COMMAND, MAKEWPARAM(IDC_ABDIAG, BN_CLICKED), 0);
                 else if (!wcscmp(opts[i].choices, L"gamecfg"))

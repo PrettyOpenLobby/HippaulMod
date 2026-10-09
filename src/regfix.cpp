@@ -793,15 +793,17 @@ static bool comclasses_all_registered(const char* id)
     return true;
 }
 
-static void register_comclass(const ComClass* c, const char* installdir)
+static void register_comclass(const ComClass* c, const char* installdir, bool stub = false)
 {
     if (comclass_registered(c)) return;      // silent: the normal case on a real install
 
     // Never register a class whose server is not there -- that turns "invisible" into
-    // "visible and fails on load", which is strictly worse to debug.
+    // "visible and fails on load", which is strictly worse to debug. The one exception
+    // is a STUB install (setitle_install below): the Viewer's patch check runs before it
+    // creates the class, so the DLL arrives first, as it does for JongHoLow.
     char dll[MAX_PATH];
     _snprintf_s(dll, sizeof(dll), _TRUNCATE, "%s\\%s", installdir, c->dll);
-    if (GetFileAttributesA(dll) == INVALID_FILE_ATTRIBUTES) {
+    if (!stub && GetFileAttributesA(dll) == INVALID_FILE_ATTRIBUTES) {
         rep("      COM class NOT registered: %s is not in that folder", c->dll);
         return;
     }
@@ -1357,3 +1359,185 @@ const char* pctitle_name(int which)
 bool jan_registered_folder(char* out, size_t cch) { return pctitle_registered_folder(PCTITLE_JAN, out, cch); }
 int  jan_install(char* out, size_t cch)           { return pctitle_install(PCTITLE_JAN, out, cch); }
 int  jan_remove(char* out, size_t cch)            { return pctitle_remove(PCTITLE_JAN, out, cch); }
+
+// ===========================================================================
+// SE's own titles installed from nothing: Tetra Master (0002), Front Mission
+// Online (0004) and Fantasy Earth (0011). The same idea as the PC titles above --
+// register first, let the Viewer's patch check download the files -- but the
+// registration is the one regfix already repairs (g_titles + g_comclasses, read
+// from a genuine install): the full COM class with its TypeLib and licence blob,
+// ContentsCLSID/IID, and for the titles that have one, an Interface stamp.
+//
+// NO PATCH.VER. With none on disk the Viewer asks the patch service with an empty
+// version, is answered "empty", and offers "Please update <title>" -- the whole
+// game, from the bundle's first version. Measured 2026-10-08 in a fresh prefix:
+// TM downloaded 136 files and started; FMO went straight to its update screen.
+// A stub stamped 00000000_0 was WORSE: the Viewer read it, deleted it and failed
+// with POL-1168 once before taking the same path on Retry. The Interface value
+// is still needed -- the Viewer keys the patch.ver it writes after the download
+// with it. A patch.ver that already decrypts under the registered Interface is
+// kept (a reinstall over files still there resumes from their version); one that
+// does not is moved aside, or the Viewer deletes it with that same POL-1168.
+// ===========================================================================
+static const struct { const char* id; const char* name; } kSeTitles[] = {
+    { "0002", "Tetra Master" },
+    { "0004", "Front Mission Online" },
+    { "0011", "Fantasy Earth" },
+};
+
+static const TitleReg* se_title(const char* id, const char** name)
+{
+    if (!id) return NULL;
+    for (int i = 0; i < _countof(kSeTitles); i++) {
+        if (strcmp(kSeTitles[i].id, id) != 0) continue;
+        for (int j = 0; j < _countof(g_titles); j++)
+            if (strcmp(g_titles[j].id, id) == 0) {
+                if (name) *name = kSeTitles[i].name;
+                return &g_titles[j];
+            }
+    }
+    return NULL;
+}
+
+const char* setitle_name(const char* id)
+{
+    const char* n = ""; se_title(id, &n);
+    return n;
+}
+
+bool setitle_registered_folder(const char* id, char* out, size_t cch)
+{
+    if (out && cch) *out = 0;
+    const TitleReg* t = se_title(id, NULL);
+    if (!t || !resolve_reg() || !detect_hive()) return false;
+    char sub[256];
+    _snprintf_s(sub, sizeof(sub), _TRUNCATE, "%s\\InstallFolder", g_hive);
+    char tmp[MAX_PATH];
+    if (!read_sz_at(sub, t->id, tmp, sizeof(tmp)) || !tmp[0]) return false;
+    if (out && cch) strcpy_s(out, cch, tmp);
+    return true;
+}
+
+// Returns 1 registered now, 0 already registered (out names where), -1 refused/failed.
+int setitle_install(const char* id, char* out, size_t cch)
+{
+    g_rep = out; g_repleft = cch;
+    if (out && cch) *out = 0;
+    const char* name = "";
+    const TitleReg* t = se_title(id, &name);
+    if (!t) { g_rep = NULL; return -1; }
+    if (!resolve_reg()) { rep("The registry could not be opened."); g_rep = NULL; return -1; }
+    sidecar_path(g_inipath, g_sidecar, sizeof(g_sidecar));
+    if (polshim_token_virtualized()) {
+        rep("The Viewer is not running as administrator, so the game could not be");
+        rep("registered. Start the Viewer as administrator and try again.");
+        logf("[setitle] %s install REFUSED: token virtualization on", t->id);
+        g_rep = NULL; return -1;
+    }
+    if (!detect_hive()) {
+        rep("No PlayOnline Viewer installation was found to add %s to.", name);
+        g_rep = NULL; return -1;
+    }
+    char existing[MAX_PATH];
+    if (setitle_registered_folder(id, existing, sizeof(existing))) {
+        rep("%s is already installed in %s.", name, existing);
+        g_rep = NULL; return 0;
+    }
+
+    char folder[MAX_PATH];
+    _snprintf_s(folder, sizeof(folder), _TRUNCATE, "%s\\%s", g_sqroot, t->folder);
+    if (!CreateDirectoryA(folder, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        rep("Could not create %s (error %lu).", folder, GetLastError());
+        g_rep = NULL; return -1;
+    }
+
+    bool ok = true;
+    for (int i = 0; i < _countof(g_comclasses); i++)
+        if (strcmp(g_comclasses[i].id, t->id) == 0) {
+            register_comclass(&g_comclasses[i], folder, true);
+            ok &= comclass_registered(&g_comclasses[i]);
+        }
+
+    char sub[256];
+    if (t->clsid) {
+        _snprintf_s(sub, sizeof(sub), _TRUNCATE, "%s\\ContentsCLSID", g_hive);
+        ok &= set_sz(sub, t->id, t->clsid);
+        _snprintf_s(sub, sizeof(sub), _TRUNCATE, "%s\\ContentsIID", g_hive);
+        ok &= set_sz(sub, t->id, t->iid);
+    }
+
+    if (t->needs_interface) {
+        char insub[256];
+        _snprintf_s(insub, sizeof(insub), _TRUNCATE, "%s\\Interface", g_hive);
+        char key[64] = "";
+        bool have_key = read_sz(insub, t->id, key, sizeof(key)) && key[0];
+        char pv[MAX_PATH];
+        _snprintf_s(pv, sizeof(pv), _TRUNCATE, "%s\\patch.ver", folder);
+        unsigned char cur[0x120];
+        bool keep = false;
+        FILE* rf = fopen(pv, "rb");
+        if (rf) {
+            char ver[64] = "";
+            keep = have_key && fread(cur, 1, sizeof(cur), rf) == sizeof(cur)
+                && patchver_read_blob(cur, atoi(t->id), key, ver, sizeof(ver));
+            fclose(rf);
+            if (keep) logf("[setitle] %s: patch.ver kept (%s), files resume from there", t->id, ver);
+        }
+        if (!keep && GetFileAttributesA(pv) != INVALID_FILE_ATTRIBUTES) {
+            char aside[MAX_PATH];
+            _snprintf_s(aside, sizeof(aside), _TRUNCATE, "%s.bak-polshim", pv);
+            MoveFileExA(pv, aside, MOVEFILE_REPLACE_EXISTING);
+            logf("[setitle] %s: patch.ver did not match the Interface stamp, moved aside", t->id);
+        }
+        if (!have_key) {
+            _snprintf_s(key, sizeof(key), _TRUNCATE, "%08x", (unsigned)GetTickCount());
+            ok &= set_sz(insub, t->id, key);
+        }
+    }
+
+    // Last, as SE's installers do it: the games menu lists a title once its
+    // install folder is known. Trailing separator where SE's value carries one.
+    if (ok) {
+        char val[MAX_PATH];
+        _snprintf_s(val, sizeof(val), _TRUNCATE, "%s%s", folder, t->trailing_slash ? "\\" : "");
+        _snprintf_s(sub, sizeof(sub), _TRUNCATE, "%s\\InstallFolder", g_hive);
+        ok &= set_sz(sub, t->id, val);
+    }
+    if (!ok) {
+        rep("Some registry values could not be written (error %lu).", GetLastError());
+        logf("[setitle] %s install: write FAILED (%lu)", t->id, GetLastError());
+        g_rep = NULL; return -1;
+    }
+    rep("%s is installed in %s.", name, folder);
+    logf("[setitle] %s installed as a stub: %s (hive %s)", t->id, folder, g_hive);
+    g_rep = NULL;
+    return 1;
+}
+
+// The title leaves the games menu. Files, class keys and the Interface stamp stay,
+// so a later Install over the same folder resumes from the files' own version.
+int setitle_remove(const char* id, char* out, size_t cch)
+{
+    g_rep = out; g_repleft = cch;
+    if (out && cch) *out = 0;
+    const char* name = "";
+    const TitleReg* t = se_title(id, &name);
+    if (!t) { g_rep = NULL; return -1; }
+    if (!resolve_reg() || !detect_hive()) { rep("No PlayOnline Viewer installation was found."); g_rep = NULL; return -1; }
+    if (polshim_token_virtualized()) {
+        rep("The Viewer is not running as administrator, so nothing was changed.");
+        g_rep = NULL; return -1;
+    }
+    char folder[MAX_PATH];
+    if (!setitle_registered_folder(id, folder, sizeof(folder))) { rep("%s is not installed.", name); g_rep = NULL; return 0; }
+    static const char* subs[] = { "InstallFolder", "ContentsCLSID", "ContentsIID" };
+    for (const char* s : subs) {
+        char key[256]; _snprintf_s(key, sizeof(key), _TRUNCATE, "%s\\%s", g_hive, s);
+        HKEY h;
+        if (rok(HKEY_LOCAL_MACHINE, key, 0, KEY_WRITE, &h) == ERROR_SUCCESS) { rdv(h, t->id); rck(h); }
+    }
+    rep("%s was removed from the Viewer. Its files are still in %s.", name, folder);
+    logf("[setitle] %s removed (files kept in %s)", t->id, folder);
+    g_rep = NULL;
+    return 1;
+}
