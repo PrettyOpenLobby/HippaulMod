@@ -1383,6 +1383,10 @@ static const struct { const char* id; const char* name; } kSeTitles[] = {
     { "0002", "Tetra Master" },
     { "0004", "Front Mission Online" },
     { "0011", "Fantasy Earth" },
+    // Not offered on its own: installed with Fantasy Earth, which refuses to start
+    // without it ("PlayOnline Friend List Application has not been installed",
+    // measured 2026-10-08). SE's FE installer carried it the same way.
+    { "0014", "PlayOnline Friend List" },
 };
 
 static const TitleReg* se_title(const char* id, const char** name)
@@ -1437,6 +1441,17 @@ int setitle_install(const char* id, char* out, size_t cch)
     if (!detect_hive()) {
         rep("No PlayOnline Viewer installation was found to add %s to.", name);
         g_rep = NULL; return -1;
+    }
+    // Fantasy Earth needs the Friend List. Checked before "already installed" so
+    // an FE registered by an older build still gets it.
+    if (!strcmp(t->id, "0011") && !setitle_registered_folder("0014", NULL, 0)) {
+        char dep[400] = "";
+        int r = setitle_install("0014", dep, sizeof(dep));
+        size_t dl = strlen(dep);
+        while (dl && dep[dl - 1] == '\n') dep[--dl] = 0;
+        g_rep = out; g_repleft = cch;           // the nested call cleared them
+        rep("%s", dep);
+        if (r < 0) { g_rep = NULL; return -1; }
     }
     char existing[MAX_PATH];
     if (setitle_registered_folder(id, existing, sizeof(existing))) {
