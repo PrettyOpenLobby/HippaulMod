@@ -475,6 +475,31 @@ static const ShimOption g_opts[] = {
     L"3x=Window, 1920 x 1344|4x=Window, 2560 x 1792|borderless=Borderless fullscreen", false,
     L"Fit to screen sizes the window to your monitor. Applies at the next start.",
     false, OPTM_PRIVATE },
+  // [jan] renderer: the game module's GS backend (PS2X_GS_BACKEND). Direct3D 11
+  // runs through DXVK under Proton on the Steam Deck.
+  { L"jan",       L"renderer",       L"gl",   OPT_ENUM, L"Renderer",
+    L"gl=OpenGL|d3d11=Direct3D 11|d3d9=Direct3D 9", false,
+    L"Direct3D 11 may run smoother, especially on the Steam Deck. Direct3D 9 is for older graphics cards. Applies at the next start.",
+    false, OPTM_PRIVATE },
+  // [jan] tile_hints: tile textures from lang/tiles/pfs1 (JAN_PFS_OVERLAY_TILES).
+  { L"jan",       L"tile_hints",     L"0",    OPT_BOOL, L"Tile hints for beginners",
+    NULL, false,
+    L"Adds E, S, W and N to the wind tiles and 1 to 9 to the character tiles. Applies at the next start.",
+    false, OPTM_PRIVATE },
+  // [jan] hide_icon_backing: skip the dark box under friend status icons.
+  { L"jan",       L"hide_icon_backing", L"0", OPT_BOOL, L"Hide friend icon backing",
+    NULL, false,
+    L"Removes the dark square behind online and away icons in the friend list. Applies at the next start.",
+    false, OPTM_PRIVATE },
+  // [jan] bgm_volume / sfx_volume: percent, applied by the game's mixer.
+  { L"jan",       L"bgm_volume",     L"100",  OPT_ENUM, L"Music volume",
+    L"100=100%|75=75%|50=50%|35=35%|25=25%|15=15%|5=5%|0=Off", false,
+    L"Applies the next time JongHoLow starts.",
+    false, OPTM_PRIVATE },
+  { L"jan",       L"sfx_volume",     L"100",  OPT_ENUM, L"Sound effects volume",
+    L"100=100%|75=75%|50=50%|35=35%|25=25%|15=15%|5=5%|0=Off", false,
+    L"Applies the next time JongHoLow starts.",
+    false, OPTM_PRIVATE },
   { NULL, NULL, NULL, OPT_BUTTON, L"Remove JongHoLow...", L"jan_remove", false,
     L"Takes JongHoLow out of the games menu. Your saves and files are kept.",
     false, OPTM_PRIVATE },
