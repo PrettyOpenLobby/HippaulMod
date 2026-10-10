@@ -3,5 +3,5 @@
 // POLSHIM_BUILD increments by exactly 1 on every dist release, so the number shown in
 // the settings dialog answers "did my update actually land?" without hashing anything.
 // The version string moves on features; this moves on every publish.
-#define POLSHIM_BUILD      206
+#define POLSHIM_BUILD      207
 #define POLSHIM_BUILD_DATE "2026-10-10"
