@@ -1043,6 +1043,11 @@ struct ShimOption {
     // does". That invariant is what stops a heading from looking like a setting,
     // and it was right to keep.
     const wchar_t* title_of;
+    // OPT_GROUP ONLY: this category is one game's own section, for a game that has
+    // no title profile (the PC titles, JongHoLow and Dirge of Cerberus). The sidebar
+    // lists it under Games with the profiled titles instead of with the settings
+    // that apply to everything. Trailing and optional, like the fields above.
+    bool           game;
 };
 const ShimOption* shim_options(int* count);
 void  iniheal(const wchar_t* ini);

@@ -156,6 +156,7 @@ static bool row_locked(const ShimOption& o) { return row_is_channel(o) && !g_cha
 // Defined with the dialog builder; the live developer toggle (in the wndproc, above
 // it) has to rebuild the sidebar too.
 static void cats_fill(HWND cats);
+static void cats_draw(const DRAWITEMSTRUCT* d);
 
 // Checked at COMPILE TIME, because an id collision does not crash -- it makes one
 // control answer to another's messages, which reads as a haunted dialog.
@@ -174,6 +175,8 @@ static wchar_t  g_filter[64] = L"";
 // typing in the search box switches there by itself -- a search that only looked
 // inside the open category would be a search that lies.
 #define CAT_ALL (-1)
+// The "Games" heading in the sidebar: an item that is not a category.
+#define CAT_HEADER (-2)
 
 // A PER-GAME SECTION IS JUST ANOTHER CATEGORY.
 //
@@ -2009,6 +2012,9 @@ static void import_character_clicked(HWND h)
 static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
+    case WM_DRAWITEM:
+        if (wp == IDC_CATS) { cats_draw((const DRAWITEMSTRUCT*)lp); return TRUE; }
+        break;
     // Hints grey, headings in the highlight colour. Both are STATICs on a
     // COLOR_BTNFACE background, so the brush has to be handed back or they paint
     // white rectangles over the dialog face.
@@ -2052,6 +2058,19 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             int sel = (int)SendMessageW(cl, LB_GETCURSEL, 0, 0);
             if (sel == LB_ERR) return 0;
             int cat = (int)(LONG_PTR)SendMessageW(cl, LB_GETITEMDATA, sel, 0);
+            // The "Games" heading is not a category. Step over it in the direction
+            // the selection was moving (arrow keys, a pad), or onto the first game
+            // when it was clicked from above.
+            if (cat == CAT_HEADER) {
+                const int cnt = (int)SendMessageW(cl, LB_GETCOUNT, 0, 0);
+                int prev = 0;
+                for (int k = 0; k < cnt; k++)
+                    if ((int)(LONG_PTR)SendMessageW(cl, LB_GETITEMDATA, k, 0) == g_cat) { prev = k; break; }
+                int to = (prev > sel) ? sel - 1 : sel + 1;
+                if (to < 0 || to >= cnt) to = prev;
+                SendMessageW(cl, LB_SETCURSEL, to, 0);
+                cat = (int)(LONG_PTR)SendMessageW(cl, LB_GETITEMDATA, to, 0);
+            }
             if (cat == g_cat) return 0;
             g_cat = cat;
             // The filter and the category are independent: picking a category while a
@@ -2486,6 +2505,66 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(h, msg, wp, lp);
 }
 
+// THE SIDEBAR'S ORDER, in one place, so the dialog and the text dump cannot
+// disagree about it.
+//
+// The settings that apply to everything come first, in table order, and every
+// game follows them as one group under a "Games" heading, sorted by name. A game
+// is either a title profile (profiles.cpp; variants of one title are one entry,
+// see cat_game_is_first) or an option-table group marked `game` (the PC titles,
+// which have no profile). Before 2026-10-10 the profiled games led the list and
+// the PC titles sat among the global groups, so the games were split in two.
+//
+// The heading is an item of its own (CAT_HEADER) that cannot be selected; see
+// the LBN_SELCHANGE handler.
+struct SideItem { int cat; wchar_t name[96]; };
+
+static int sidebar_items(bool show_dev, SideItem* out, int cap)
+{
+    int n = 0; const ShimOption* opts = shim_options(&n);
+    int k = 0;
+    auto add = [&](int cat, const wchar_t* name) {
+        if (k >= cap) return;
+        out[k].cat = cat;
+        wcsncpy_s(out[k].name, name ? name : L"", _TRUNCATE);
+        k++;
+    };
+    add(CAT_ALL, L"All settings");
+    for (int i = 0; i < n; i++) {
+        if (opts[i].type != OPT_GROUP) continue;
+        if (opts[i].dev && !show_dev) continue;
+        // A group tagged for a title is NOT listed on its own: its rows appear
+        // inside that game's section, so listing it here would put the same game
+        // in the sidebar twice.
+        if (group_title_leaf(opts, i) || opts[i].game) continue;
+        add(i, cat_name(opts[i]));
+    }
+    // The games, gathered first so they can be sorted together.
+    static SideItem games[64]; int ng = 0;
+    for (int i = 0; i < profiles_count() && ng < (int)_countof(games); i++) {
+        const TitleProfile* p = profiles_at(i);
+        if (!p || !cat_game_is_first(i)) continue;
+        games[ng].cat = CAT_GAME_BASE - i;
+        games[ng].name[0] = 0;
+        MultiByteToWideChar(CP_ACP, 0, p->title, -1, games[ng].name, _countof(games[ng].name));
+        ng++;
+    }
+    for (int i = 0; i < n && ng < (int)_countof(games); i++) {
+        if (opts[i].type != OPT_GROUP || !opts[i].game) continue;
+        if (opts[i].dev && !show_dev) continue;
+        games[ng].cat = i;
+        wcsncpy_s(games[ng].name, cat_name(opts[i]), _TRUNCATE);
+        ng++;
+    }
+    for (int a = 1; a < ng; a++)                      // insertion sort: a handful of rows
+        for (int b = a; b > 0 && _wcsicmp(games[b - 1].name, games[b].name) > 0; b--) {
+            SideItem t = games[b]; games[b] = games[b - 1]; games[b - 1] = t;
+        }
+    if (ng) add(CAT_HEADER, L"Games");
+    for (int g = 0; g < ng; g++) add(games[g].cat, games[g].name);
+    return k;
+}
+
 // FILL (or REFILL) the category sidebar from the option table, honouring g_show_dev
 // and re-selecting whatever g_cat is now. Its own function because the developer
 // toggle has to rebuild it live: ticking the box adds a whole category, and a
@@ -2494,45 +2573,49 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 static void cats_fill(HWND cats)
 {
     if (!cats) return;
-    int n = 0; const ShimOption* opts = shim_options(&n);
+    static SideItem items[96];
+    const int ni = sidebar_items(g_show_dev, items, (int)_countof(items));
     SendMessageW(cats, WM_SETREDRAW, FALSE, 0);
     SendMessageW(cats, LB_RESETCONTENT, 0, 0);
-    int sel = 0, item = 0;
-    int ai = (int)SendMessageW(cats, LB_ADDSTRING, 0, (LPARAM)L"All settings");
-    SendMessageW(cats, LB_SETITEMDATA, ai, (LPARAM)CAT_ALL);
-    // THE GAMES COME FIRST (2026-09-08). They were listed under every global group,
-    // which put "settings for Tetra Master" below half a dozen headings -- while one
-    // of those headings was itself holding a Front Mission setting. Most of what
-    // anybody opens this window to change belongs to one game, so the games are the
-    // top of the list and the global defaults follow them.
-    //
-    // The title only -- no module name: which DLL a game happens to load is not
-    // something anybody should have to read to change a setting. Variants of one
-    // title collapse into one entry and are written together
-    // (cat_game_for_each_module).
-    for (int i = 0; i < profiles_count(); i++) {
-        const TitleProfile* p = profiles_at(i);
-        if (!p || !cat_game_is_first(i)) continue;
-        wchar_t wtit[96] = L"";
-        MultiByteToWideChar(CP_ACP, 0, p->title, -1, wtit, _countof(wtit));
-        item = (int)SendMessageW(cats, LB_ADDSTRING, 0, (LPARAM)wtit);
-        SendMessageW(cats, LB_SETITEMDATA, item, (LPARAM)(CAT_GAME_BASE - i));
-        if ((CAT_GAME_BASE - i) == g_cat) sel = item;
-    }
-    for (int i = 0; i < n; i++) {
-        if (opts[i].type != OPT_GROUP) continue;
-        if (opts[i].dev && !g_show_dev) continue;
-        // A group tagged for a title is NOT listed on its own: its rows appear
-        // inside that game's section above, so listing it here would put the
-        // same game in the sidebar twice.
-        if (group_title_leaf(opts, i)) continue;
-        item = (int)SendMessageW(cats, LB_ADDSTRING, 0, (LPARAM)cat_name(opts[i]));
-        SendMessageW(cats, LB_SETITEMDATA, item, (LPARAM)i);
-        if (i == g_cat) sel = item;
+    int sel = 0;
+    for (int i = 0; i < ni; i++) {
+        int item = (int)SendMessageW(cats, LB_ADDSTRING, 0, (LPARAM)items[i].name);
+        SendMessageW(cats, LB_SETITEMDATA, item, (LPARAM)items[i].cat);
+        if (items[i].cat == g_cat && items[i].cat != CAT_HEADER) sel = item;
     }
     SendMessageW(cats, LB_SETCURSEL, sel, 0);
     SendMessageW(cats, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(cats, NULL, TRUE);
+}
+
+// The sidebar is owner-drawn only so the "Games" heading can look like a heading:
+// grey, with a rule above it, and never highlighted. Every other item is drawn the
+// way a plain listbox draws it.
+static void cats_draw(const DRAWITEMSTRUCT* d)
+{
+    if (!d || d->itemID == (UINT)-1) return;
+    const int cat = (int)(LONG_PTR)SendMessageW(d->hwndItem, LB_GETITEMDATA, d->itemID, 0);
+    wchar_t text[128] = L"";
+    if (SendMessageW(d->hwndItem, LB_GETTEXTLEN, d->itemID, 0) < (LRESULT)_countof(text))
+        SendMessageW(d->hwndItem, LB_GETTEXT, d->itemID, (LPARAM)text);
+    const bool header = (cat == CAT_HEADER);
+    const bool selected = !header && (d->itemState & ODS_SELECTED);
+    FillRect(d->hDC, &d->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+    RECT r = d->rcItem; r.left += 2;
+    SetBkMode(d->hDC, TRANSPARENT);
+    HGDIOBJ old = NULL;
+    if (header) {
+        RECT line = { d->rcItem.left + 2, d->rcItem.top + 1, d->rcItem.right - 2, d->rcItem.top + 2 };
+        FillRect(d->hDC, &line, GetSysColorBrush(COLOR_GRAYTEXT));
+        if (g_font_hdr) old = SelectObject(d->hDC, g_font_hdr);
+        SetTextColor(d->hDC, GetSysColor(COLOR_GRAYTEXT));
+    } else {
+        if (g_font) old = SelectObject(d->hDC, g_font);
+        SetTextColor(d->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+    }
+    DrawTextW(d->hDC, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    if (old) SelectObject(d->hDC, old);
+    if (!header && (d->itemState & ODS_FOCUS)) DrawFocusRect(d->hDC, &d->rcItem);
 }
 
 // Ctrl+Shift+D in the settings window, or LB+RB+Y held for two seconds on a pad
@@ -2704,11 +2787,21 @@ static void build_and_pump()
     // cat_of_row() use.
     HWND cats = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", NULL,
                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-                                LBS_NOTIFY | LBS_HASSTRINGS,
+                                LBS_NOTIFY | LBS_HASSTRINGS | LBS_OWNERDRAWFIXED,
                                 LY_PAD, LY_FILTERBAR, LY_SIDEW - LY_PAD - LY_PAD, pg.pane_h,
                                 h, (HMENU)IDC_CATS, inst, NULL);
     if (cats) {
         SendMessageW(cats, WM_SETFONT, (WPARAM)g_font, TRUE);
+        // Owner-drawn rows take their height from here, not from the font.
+        HDC dc = GetDC(cats);
+        if (dc) {
+            HGDIOBJ old = SelectObject(dc, g_font);
+            TEXTMETRICW tm;
+            if (GetTextMetricsW(dc, &tm))
+                SendMessageW(cats, LB_SETITEMHEIGHT, 0, MAKELPARAM(tm.tmHeight + 2, 0));
+            SelectObject(dc, old);
+            ReleaseDC(cats, dc);
+        }
         cats_fill(cats);
     } else {
         // Not fatal: without the sidebar the dialog is exactly what it was before it,
@@ -3915,24 +4008,18 @@ void polsettings_dump_cats_for_test(const wchar_t* ini)
     int n = 0; const ShimOption* opts = shim_options(&n);
     static LyRow pos[LY_MAXROWS];
 
-    struct Cat { int id; const wchar_t* name; };
-    static Cat cats[64]; int ncat = 0;
-    cats[ncat++] = { CAT_ALL, L"All settings" };
-    for (int i = 0; i < n && ncat < 64; i++)
-        if (opts[i].type == OPT_GROUP && !opts[i].dev && !group_title_leaf(opts, i))
-            cats[ncat++] = { i, cat_name(opts[i]) };
-    for (int g = 0; g < profiles_count() && ncat < 64; g++)
-        if (cat_game_is_first(g)) {
-            const TitleProfile* p = profiles_at(g);
-            wchar_t* w = (wchar_t*)calloc(96, sizeof(wchar_t));
-            MultiByteToWideChar(CP_ACP, 0, p->title, -1, w, 95);
-            cats[ncat++] = { CAT_GAME_BASE - g, w };
-        }
+    // The same list, in the same order, as the dialog's sidebar.
+    static SideItem side[96];
+    const int ns = sidebar_items(false, side, (int)_countof(side));
+    wprintf(L"Sidebar:\n");
+    for (int c = 0; c < ns; c++)
+        wprintf(side[c].cat == CAT_HEADER ? L"  [%ls]\n" : L"    %ls\n", side[c].name);
 
-    for (int c = 1; c < ncat; c++) {     // skip All settings: it is every row
+    for (int c = 1; c < ns; c++) {       // skip All settings: it is every row
+        if (side[c].cat == CAT_HEADER) continue;
         int cw = 0, ch = 0;
-        int m = layout_compute(false, L"", cats[c].id, pos, (int)_countof(pos), &cw, &ch);
-        wprintf(L"\n== %ls\n", cats[c].name);
+        int m = layout_compute(false, L"", side[c].cat, pos, (int)_countof(pos), &cw, &ch);
+        wprintf(L"\n== %ls\n", side[c].name);
         int shown = 0;
         for (int i = 0; i < m; i++) {
             if (pos[i].y < 0) continue;
