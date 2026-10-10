@@ -1239,8 +1239,22 @@ static void patch_signup_scheme(HMODULE mod)
     log_flush();
 }
 
+// True when the child runs with a different bitness than this DLL (a 64-bit
+// program started from the 32-bit Viewer, e.g. Dirge of Cerberus's game).
+// Our DLL and LoadLibraryW address only mean something in a 32-bit process.
+// Windows refuses the remote thread on its own, but Wine starts it at that
+// address and the child dies at once with an access violation.
+static BOOL other_bitness(HANDLE hProcess)
+{
+    BOOL selfWow = FALSE, childWow = FALSE;
+    if (!IsWow64Process(GetCurrentProcess(), &selfWow) || !IsWow64Process(hProcess, &childWow))
+        return FALSE;
+    return selfWow != childWow;
+}
+
 static void inject_into(HANDLE hProcess)
 {
+    if (other_bitness(hProcess)) return;
     SIZE_T cb = (wcslen(g_self_path) + 1) * sizeof(wchar_t);
     void* remote = VirtualAllocEx(hProcess, NULL, cb, MEM_COMMIT | MEM_RESERVE,
                                   PAGE_READWRITE);
