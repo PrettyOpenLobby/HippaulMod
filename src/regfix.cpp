@@ -793,16 +793,104 @@ static bool comclasses_all_registered(const char* id)
     return true;
 }
 
+// IMPORTANT: FFXI-9001 "The installation path is not valid", found 2026-10-13 on a Steam Deck.
+//
+// FFXi.dll (retail 30260805_0 and 30260904_0, and the Test Client build) checks where it
+// was loaded from before anything else: GetModuleHandle("FFXi.dll") -> GetModuleFileName
+// -> GetLongPathName, then it reads InstallFolder\0001 and walks it character by character
+// against that path, upper-casing both and letting '\' or '/' on either side match anything.
+// Any other difference is error 9, shown as FFXI-9001.
+//
+// The load path is whatever InprocServer32 says, so a class that is REGISTERED -- ProgID
+// present, server file present, everything comclass_registered asks about -- still fails
+// if it is registered under a different spelling of the folder. The Deck had exactly that:
+// the Steam installer registered Z:\home\deck\...\FFXi.dll, and InstallFolder\0001 later
+// became S:\steamapps\... once Proton added the s: drive. Same folder, different string.
+// "regsvr32 fixes it" works for the same reason: it re-registers at the path it was run with.
+//
+// Only rows served by FFXi.dll are held to this, because that is the code that was read.
+// Other titles' DLLs were not checked, and a custom setup may point their classes elsewhere.
+static bool ffxi_path_under(const char* folder, const char* path)
+{
+    for (; *folder; folder++, path++) {
+        char f = *folder, p = *path;
+        if (f == '\\' || f == '/' || p == '\\' || p == '/') continue;
+        if (toupper((unsigned char)f) != toupper((unsigned char)p)) return false;
+    }
+    return true;
+}
+
+static bool comclass_enforces_path(const ComClass* c)
+{
+    return _stricmp(c->dll, "FFXi.dll") == 0;
+}
+
+// The registered server path of a class, long-path expanded the way FFXi.dll expands its own.
+static bool comclass_server(const ComClass* c, char* out, size_t cch)
+{
+    char sub[256], raw[MAX_PATH];
+    _snprintf_s(sub, sizeof(sub), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", comclass_guid(c));
+    if (!read_sz_at(sub, "", raw, sizeof(raw)) || !raw[0]) return false;
+    DWORD n = GetLongPathNameA(raw, out, (DWORD)cch);
+    if (!n || n >= cch) strcpy_s(out, cch, raw);
+    return true;
+}
+
+// True when the class has no server value at all (that is comclass_registered's problem,
+// not this one) or its server sits under installdir by FFXi.dll's rule.
+static bool comclass_server_ok(const ComClass* c, const char* installdir)
+{
+    if (!comclass_enforces_path(c)) return true;
+    char srv[MAX_PATH];
+    if (!comclass_server(c, srv, sizeof(srv))) return true;
+    return ffxi_path_under(installdir, srv);
+}
+
+static bool comclasses_servers_ok(const char* id, const char* installdir)
+{
+    for (int i = 0; i < _countof(g_comclasses); i++)
+        if (strcmp(g_comclasses[i].id, id) == 0 && !comclass_server_ok(&g_comclasses[i], installdir))
+            return false;
+    return true;
+}
+
+static void report_comclass_servers(const char* id, const char* installdir)
+{
+    for (int i = 0; i < _countof(g_comclasses); i++) {
+        const ComClass* c = &g_comclasses[i];
+        if (strcmp(c->id, id) != 0 || comclass_server_ok(c, installdir)) continue;
+        char srv[MAX_PATH]; comclass_server(c, srv, sizeof(srv));
+        rep("      %s is registered at %s,", c->classname, srv);
+        rep("      which is not under InstallFolder %s -- the game stops with FFXI-9001", installdir);
+    }
+}
+
 static void register_comclass(const ComClass* c, const char* installdir, bool stub = false)
 {
-    if (comclass_registered(c)) return;      // silent: the normal case on a real install
+    char dll[MAX_PATH];
+    _snprintf_s(dll, sizeof(dll), _TRUNCATE, "%s\\%s", installdir, c->dll);
+
+    if (comclass_registered(c)) {
+        if (comclass_server_ok(c, installdir)) return;   // silent: the normal case on a real install
+        // Registered, but at a path FFXi.dll will refuse (see ffxi_path_under). Repoint
+        // ONLY the server value; the rest of the class is right. overwrite_sz keeps the
+        // old path in the sidecar so clean=1 puts it back rather than deleting it.
+        char sub[320], old[MAX_PATH];
+        _snprintf_s(sub, sizeof(sub), _TRUNCATE, "SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", comclass_guid(c));
+        read_sz_at(sub, "", old, sizeof(old));
+        if (GetFileAttributesA(dll) == INVALID_FILE_ATTRIBUTES)
+            rep("      COM server NOT repointed: %s is not in that folder", c->dll);
+        else if (overwrite_sz(sub, "", dll, old))
+            rep("      COM server REPOINTED %s: %s -> %s (clean=1 restores it)", comclass_guid(c), old, dll);
+        else
+            rep("      COM server repoint FAILED (%lu) -- need elevation?", GetLastError());
+        return;
+    }
 
     // Never register a class whose server is not there -- that turns "invisible" into
     // "visible and fails on load", which is strictly worse to debug. The one exception
     // is a STUB install (setitle_install below): the Viewer's patch check runs before it
     // creates the class, so the DLL arrives first, as it does for JongHoLow.
-    char dll[MAX_PATH];
-    _snprintf_s(dll, sizeof(dll), _TRUNCATE, "%s\\%s", installdir, c->dll);
     if (!stub && GetFileAttributesA(dll) == INVALID_FILE_ATTRIBUTES) {
         rep("      COM class NOT registered: %s is not in that folder", c->dll);
         return;
@@ -946,6 +1034,8 @@ int regfix_scan(char* out, size_t cch, int apply)
                 }
                 rck(hk);
             }
+            // Registered at a path FFXi.dll's own install-path check rejects (FFXI-9001).
+            if (reg[0] && !comclasses_servers_ok(t->id, reg))     strcat_s(miss, " ComServerPath");
             const char* fverdict = reg[0] ? folder_verdict(reg) : "InstallFolder is empty";
             if (fverdict) {
                 rep("%s %-22s BROKEN -- %s", t->id, t->folder, fverdict);
@@ -981,6 +1071,7 @@ int regfix_scan(char* out, size_t cch, int apply)
             // Registered but not fully. This is the case the Deck kept hitting, so it
             // gets FIXED here rather than described -- apply=1 means repair, not report.
             rep("%s %-22s needs repair --%s", t->id, t->folder, miss);
+            report_comclass_servers(t->id, reg);
             if (apply) {
                 // reg[] is this title's install folder and is known good -- folder_verdict
                 // passed above, which it cannot do on an empty path. Run BOTH repairs
