@@ -506,26 +506,11 @@ static const ShimOption g_opts[] = {
     false, OPTM_PRIVATE },
 
   // ==========================================================================
-  // Dirge of Cerberus (content 0010) on PC, the same way as JongHoLow
-  // (regfix.cpp pctitle_install). [doc] window is read by its content module
-  // (doc_content.dll) when it starts the game. Shown to every player on a
-  // private server since the W2U/0010 update carries the whole game (2026-10-10).
+  // Dirge of Cerberus (content 0010) on PC: withdrawn 2026-10-16. The PC build is
+  // not fit to play, so the install button and its settings are gone; only Remove
+  // stays, for players who installed it before.
   { NULL, NULL, NULL, OPT_GROUP, L"Dirge of Cerberus", L"Dirge of Cerberus", false, NULL,
     false, OPTM_ANY, NULL, /*game*/ true },
-  { NULL, NULL, NULL, OPT_BUTTON, L"Install Dirge of Cerberus...", L"doc_install", false,
-    L"Adds Dirge of Cerberus to the games menu. It downloads (1.1 GB) the first time you start it.",
-    false, OPTM_PRIVATE },
-  { L"doc",       L"window",         L"dynamic", OPT_ENUM, L"Window",
-    L"dynamic=Fit to screen|1x=Window, 640 x 448|1.5x=Window, 960 x 672|2x=Window, 1280 x 896|"
-    L"3x=Window, 1920 x 1344|4x=Window, 2560 x 1792|borderless=Borderless fullscreen", false,
-    L"Fit to screen sizes the window to your monitor. Applies at the next start.",
-    false, OPTM_PRIVATE },
-  // [doc] renderer: the GS backend doc_content.dll hands the game
-  // (PS2X_GS_BACKEND), read with the same precedence as [doc] window.
-  { L"doc",       L"renderer",       L"d3d11", OPT_ENUM, L"Renderer",
-    L"d3d11=Direct3D 11|gl=OpenGL", false,
-    L"Try OpenGL if the picture looks wrong. Applies at the next start.",
-    false, OPTM_PRIVATE },
   { NULL, NULL, NULL, OPT_BUTTON, L"Remove Dirge of Cerberus...", L"doc_remove", false,
     L"Takes Dirge of Cerberus out of the games menu. Your saves and files are kept.",
     false, OPTM_PRIVATE },
