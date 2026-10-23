@@ -498,6 +498,64 @@ static int do_revert(const char* dir)
 }
 
 // -----------------------------------------------------------------------------
+// The games the settings pane's Install buttons add, for an installer that offers
+// them outside the Viewer. The registration is regfix.cpp's own, so a title added
+// here is the one the Viewer's repairs expect.
+// log.cpp's summary is the DLL's; the setup program has no proxy to summarise.
+void proxy_summary(FILE*) {}
+
+static const struct { const char* id; int pc; } kOffered[] = {
+    { "0002", -1 },              // Tetra Master
+    { "0004", -1 },              // Front Mission Online
+    { "0011", -1 },              // Fantasy Earth (adds the Friend List, 0014)
+    { "0003", PCTITLE_JAN },     // JongHoLow
+};
+
+static int titles_main(const char* dir, const char* op, const char* id)
+{
+    char ini[MAX_PATH];
+    join(ini, sizeof(ini), dir, "polshim.ini");
+    wchar_t wini[MAX_PATH];
+    MultiByteToWideChar(CP_ACP, 0, ini, -1, wini, MAX_PATH);
+    regfix_use_ini(wini);
+
+    if (!strcmp(op, "list")) {
+        // One line per title, for a caller to read: id|name|installed|folder
+        for (int i = 0; i < (int)_countof(kOffered); i++) {
+            char folder[MAX_PATH] = "";
+            bool have = kOffered[i].pc >= 0
+                ? pctitle_registered_folder(kOffered[i].pc, folder, sizeof(folder))
+                : setitle_registered_folder(kOffered[i].id, folder, sizeof(folder));
+            const char* name = kOffered[i].pc >= 0 ? pctitle_name(kOffered[i].pc)
+                                                   : setitle_name(kOffered[i].id);
+            printf("title|%s|%s|%s|%s\n", kOffered[i].id, name, have ? "yes" : "no", folder);
+        }
+        return 0;
+    }
+
+    // Removing also takes the titles no longer offered: Dirge of Cerberus (0010)
+    // and the Friend List (0014), as the settings pane's Remove buttons do.
+    int pc = -1;
+    bool known = false;
+    for (int i = 0; i < (int)_countof(kOffered); i++)
+        if (!strcmp(kOffered[i].id, id)) { known = true; pc = kOffered[i].pc; }
+    if (!strcmp(op, "remove") && !known) {
+        if (!strcmp(id, "0010")) { known = true; pc = PCTITLE_DOC; }
+        else if (!strcmp(id, "0014")) known = true;
+    }
+    if (!known) return fail("%s is not a title this setup can %s", id, op);
+
+    char rep[1024] = "";
+    int r;
+    if (!strcmp(op, "install"))
+        r = pc >= 0 ? pctitle_install(pc, rep, sizeof(rep)) : setitle_install(id, rep, sizeof(rep));
+    else
+        r = pc >= 0 ? pctitle_remove(pc, rep, sizeof(rep)) : setitle_remove(id, rep, sizeof(rep));
+    printf("%s", rep);
+    if (rep[0] && rep[strlen(rep) - 1] != '\n') printf("\n");
+    return r < 0 ? 1 : 0;
+}
+
 static void usage(void)
 {
     printf(
@@ -515,6 +573,12 @@ static void usage(void)
       "  --force           install even while a Viewer is running (second installs)\n"
       "  --where           just report which install is found, change nothing\n"
       "  --silent          never prompt: take defaults, never wait on exit\n"
+      "  --list-titles     list the games this setup can add, one per line as\n"
+      "                    title|id|name|installed|folder\n"
+      "  --install-title=<id>  add a game for the Viewer to download, as the\n"
+      "                    settings pane's Install button does: 0002 Tetra Master,\n"
+      "                    0004 Front Mission Online, 0011 Fantasy Earth, 0003 JongHoLow\n"
+      "  --remove-title=<id>   take one away again (its files are kept)\n"
       "  --help\n\n"
       "The Viewer must be closed. Installing is reversible with --revert.\n",
       POLSHIM_BUILD);
@@ -526,10 +590,15 @@ int main(int argc, char** argv)
     char server[256]          = "";
     char update_url[512]      = "";
     bool gamepad = false, revert = false, no_update = false, force = false, where = false;
+    const char* title_op = NULL;
+    char title_id[16] = "";
 
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if      (_strnicmp(a, "--dir=",        6)  == 0) { strncpy_s(dir, a + 6, _TRUNCATE); rstrip_slash(dir); }
+        else if (_stricmp(a, "--list-titles") == 0) title_op = "list";
+        else if (_strnicmp(a, "--install-title=", 16) == 0) { title_op = "install"; strncpy_s(title_id, a + 16, _TRUNCATE); }
+        else if (_strnicmp(a, "--remove-title=",  15) == 0) { title_op = "remove";  strncpy_s(title_id, a + 15, _TRUNCATE); }
         else if (_strnicmp(a, "--server=",     9)  == 0) strncpy_s(server, a + 9, _TRUNCATE);
         else if (_strnicmp(a, "--update-url=", 13) == 0) { strncpy_s(update_url, a + 13, _TRUNCATE); rstrip_slash(update_url); }
         else if (_stricmp(a, "--gamepad")   == 0) gamepad   = true;
@@ -555,6 +624,9 @@ int main(int argc, char** argv)
     }
     rstrip_slash(dir);
     if (!dir_exists(dir)) return fail("Not a folder: \"%s\"", dir);
+
+    // A title request does only that: the hook is installed, or not, separately.
+    if (title_op) return titles_main(dir, title_op, title_id);
 
     char pol[MAX_PATH], hook[MAX_PATH], orig[MAX_PATH], bak[MAX_PATH], ini[MAX_PATH];
     join(pol,  sizeof(pol),  dir, "pol.exe");

@@ -881,6 +881,7 @@ void* uitrace_real_FatalAppExitA();    void* uitrace_hook_FatalAppExitA();
 // write the missing HKLM\...\PlayOnlineUS keys so they appear/launch. [regfix] enable=1;
 // clean=1 undoes exactly what it added. Runs pre-entry, so writes land before the menu.
 void  regfix_run(const wchar_t* ini);
+void  regfix_use_ini(const wchar_t* ini);
 int   regfix_enabled();
 // Run the scan on demand and get a human-readable verdict for EVERY title (including
 // the ones it rejected, and why) -- what the settings dialog's "Repair games now"

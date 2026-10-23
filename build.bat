@@ -108,11 +108,14 @@ rem hence built last, after the proxy exists) plus the shipping ini template
 rem (dist\polshim.ini), so the download is a single file that cannot go stale
 rem against its payload. The manifest is requireAdministrator: the swap writes into
 rem Program Files. /I ..\src lets rc find setup.manifest and buildnum.h.
+rem regfix.cpp and what it needs (log, patchver, fmoiid) come along for
+rem --install-title: the games are registered by the settings pane's own code.
 rc /nologo /I ..\src /fo setup.res ..\setup.rc
 if errorlevel 1 ( popd & echo [!] setup.rc compile failed & exit /b 1 )
 cl /nologo /MT /O2 /W3 /EHsc /DWIN32 /D_CRT_SECURE_NO_WARNINGS %RELDEFS% %XPDEFS% ^
-   ..\src\setup.cpp ..\src\polfiletxt.cpp %XPSRC% setup.res /Fe:PolShimSetup.exe ^
-   /link kernel32.lib user32.lib advapi32.lib wininet.lib bcrypt.lib /MANIFEST:NO %XPEXE%
+   ..\src\setup.cpp ..\src\polfiletxt.cpp ..\src\regfix.cpp ..\src\log.cpp ^
+   ..\src\patchver.cpp ..\src\fmoiid.cpp %XPSRC% setup.res /Fe:PolShimSetup.exe ^
+   /link kernel32.lib user32.lib advapi32.lib wininet.lib bcrypt.lib ole32.lib /MANIFEST:NO %XPEXE%
 
 set RC=%ERRORLEVEL%
 popd

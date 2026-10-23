@@ -1261,6 +1261,13 @@ static void repair_eq2_apppaths()
             "elevation?", r1, r2);
 }
 
+// The setup program registers titles without running the repairs: it names the
+// ini the title functions read their settings and sidecar from, and calls them.
+void regfix_use_ini(const wchar_t* ini)
+{
+    wcsncpy_s(g_inipath, ini, _TRUNCATE);
+}
+
 void regfix_run(const wchar_t* ini)
 {
     wcsncpy_s(g_inipath, ini, _TRUNCATE);
