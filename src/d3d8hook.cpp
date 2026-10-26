@@ -214,6 +214,9 @@ static int g_d3d_nosteal   = 1;   // refuse focus grabs from another application
 // own window back to the top, this stops it re-grabbing the mouse. See the
 // WM_CAPTURECHANGED handling in spy_proc for the RE that produced it.
 static int g_d3d_nograb     = 1;
+// ...and this stops a minimise ending the title. FMO quits ("Force quitting") on any
+// WM_ACTIVATE that carries the minimised flag; see the WM_ACTIVATE handling in spy_proc.
+static int g_d3d_nominquit  = 1;
 static int g_d3d_msgspy    = 1;   // watch the mouse messages the windows receive
 static int g_d3d_fakemode  = 1;   // report the backbuffer as the screen size
 static int g_hang_dump_ms   = 0;  // [dx] hang_dump_ms: if the title has not presented
@@ -748,6 +751,7 @@ void d3d8_configure(const wchar_t* ini)
     g_d3d_cursor    = GetPrivateProfileIntW(L"dx", L"d3d_cursor",    2, ini);
     g_d3d_nosteal   = ini_int_title(L"dx", L"d3d_nosteal",   1, ini);
     g_d3d_nograb    = ini_int_title(L"dx", L"d3d_nograb",    1, ini);
+    g_d3d_nominquit = ini_int_title(L"dx", L"d3d_nominquit", 1, ini);
     g_nosteal_grace = GetPrivateProfileIntW(L"dx", L"d3d_nosteal_grace", 60000, ini);
     g_d3d_msgspy    = GetPrivateProfileIntW(L"dx", L"d3d_msgspy",    trace_at(2), ini);
     g_d3d_fakemode  = GetPrivateProfileIntW(L"dx", L"d3d_fakemode",  1, ini);
@@ -894,6 +898,7 @@ void d3d8_reload(const wchar_t* ini)
     g_d3d_cursor    = GetPrivateProfileIntW(L"dx", L"d3d_cursor",    2, ini);
     g_d3d_nosteal   = ini_int_title(L"dx", L"d3d_nosteal",   1, ini);
     g_d3d_nograb    = ini_int_title(L"dx", L"d3d_nograb",    1, ini);
+    g_d3d_nominquit = ini_int_title(L"dx", L"d3d_nominquit", 1, ini);
     g_d3d_freecursor = ini_int_title(L"dx", L"d3d_freecursor", 0, ini);
     g_d3d_scale      = ini_int_title(L"dx", L"d3d_scale",      0, ini);
     g_d3d_remember   = GetPrivateProfileIntW(L"dx", L"d3d_remember_window", 1, ini);
@@ -5594,6 +5599,30 @@ static LRESULT CALLBACK spy_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                          "hit-testing, so its caption stops dragging. "
                          "[dx] d3d_nograb=0 to restore SE's behaviour.", (void*)lp);
                 return 0;
+            }
+
+            // MINIMISING ENDS THE TITLE. FMO's wndproc WM_ACTIVATE arm (unpacked
+            // image) sets its frame pacing from LOWORD(wParam), then:
+            //
+            //   6100A641  shr  esi, 0x10           ; HIWORD(wParam) = fMinimized
+            //   6100A644  test esi, esi
+            //   6100A646  je   0x6100A7F7          ; not minimised -> carry on
+            //   6100A64C  push 0x61328E18          ; "Force quitting"
+            //   6100A651  call 0x6100A210          ; MessageBox, then quit
+            //
+            // Every caption minimise is WM_SIZE MINIMIZED, ACTIVATE wParam=00200000,
+            // then the box -- no exception anywhere, so this is a deliberate quit,
+            // not a crash. Fullscreen-exclusive could never be minimised; only the
+            // window we gave it can. Deliver the activation state with the flag cleared.
+            if (e->h == g_game_window && msg == WM_ACTIVATE && HIWORD(wp) &&
+                g_d3d_nominquit && !g_title_native_windowed) {
+                static LONG said = 0;
+                if (InterlockedIncrement(&said) <= 3)
+                    logf("[frm] WM_ACTIVATE minimised flag cleared for the game "
+                         "(wParam %08lX -> %08lX) -- FMO quits on it. "
+                         "[dx] d3d_nominquit=0 to restore SE's behaviour.",
+                         (unsigned long)wp, (unsigned long)LOWORD(wp));
+                wp = LOWORD(wp);
             }
 
             // WM_NCHITTEST is what makes a title bar draggable. If the game
