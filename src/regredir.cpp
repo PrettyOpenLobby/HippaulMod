@@ -35,6 +35,8 @@
 //           running exe lives in (the truly folder-aware default).
 
 #include "polshim.h"
+#include <mmsystem.h>
+#include <dsound.h>       // LPDSENUMCALLBACKA ([fmovoice] fix_devices)
 
 static int      g_on = 0;
 static char     g_fromA[MAX_PATH];  static size_t g_fromA_len = 0;
@@ -606,6 +608,85 @@ static LONG serve_szA(const char* v, LPDWORD lpType, LPBYTE lpData, LPDWORD lpcb
     return ERROR_SUCCESS;
 }
 
+// ------------------------------------------------------------- fmo voice devices
+//
+// [fmovoice] fix_devices (default 1) -- serve FMO the voice-device INDEX that
+// matches the device NAME it saved. Registry untouched.
+//
+// FMO stores each voice device twice: VoiceChatPlayDev / VoiceChatRecDev (the
+// name) and VoiceChatPlayDevNo / VoiceChatRecDevNo (an index, REG_SZ). Its config
+// object (ctor 0x610807E0) builds its device lists WITHOUT DirectSound's "Primary
+// Sound Driver" / "Primary Sound Capture Driver" entry and accepts a saved device
+// only when list[No].name == name exactly. The in-game settings screen saves the
+// index counting that Primary entry, so every save is off by one: the config field
+// comes back -1, the main-menu mic test prints TkVoiceConfig[ 0 , -1 ] and never
+// records, and the settings box reads back EMPTY (live 2026-10-26: PlayDevNo "1"
+// for "Speakers (LG UltraFine Display Audio)", which is index 0 to FMO).
+//
+// So when FMO reads a ...DevNo, look its sibling name up in DirectSound's own list
+// minus the Primary (NULL-GUID) entry and serve that position. A name that is not
+// in the list, or an index that already matches, passes straight through.
+static int g_fmodev = 1;
+int fmodev_enabled() { return g_fmodev; }
+
+struct DevList { int n; char names[16][128]; };
+
+static BOOL CALLBACK fmodev_enum_cb(LPGUID guid, LPCSTR desc, LPCSTR, LPVOID ctx)
+{
+    DevList* l = (DevList*)ctx;
+    if (guid && desc && l->n < 16)              // NULL GUID = the Primary entry
+        strncpy_s(l->names[l->n++], sizeof(l->names[0]), desc, _TRUNCATE);
+    return TRUE;
+}
+
+static const DevList* fmodev_list(bool capture)
+{
+    static DevList lists[2];
+    static LONG built[2] = { 0, 0 };
+    int k = capture ? 1 : 0;
+    if (InterlockedCompareExchange(&built[k], 1, 0) == 0) {
+        typedef HRESULT (WINAPI *EnumA)(LPDSENUMCALLBACKA, LPVOID);
+        HMODULE ds = LoadLibraryW(L"dsound.dll");
+        EnumA fn = ds ? (EnumA)GetProcAddress(ds, capture ? "DirectSoundCaptureEnumerateA"
+                                                          : "DirectSoundEnumerateA") : NULL;
+        lists[k].n = 0;
+        if (fn) fn(fmodev_enum_cb, &lists[k]);
+    }
+    return &lists[k];
+}
+
+// The corrected index for a ...DevNo read, as a string in `out`, or false to pass
+// the real value through.
+static bool fmodev_fix(HKEY hKey, const char* name, char* out, size_t cb)
+{
+    if (!g_fmodev || !real_RQVA || !name) return false;
+    bool play = _stricmp(name, "VoiceChatPlayDevNo") == 0;
+    bool rec  = _stricmp(name, "VoiceChatRecDevNo") == 0;
+    if (!play && !rec) return false;
+    wchar_t kp[512];
+    if (!key_path(hKey, kp, _countof(kp)) || !path_ends_with(kp, L"SQUARE ENIX\\FrontMissionOnline"))
+        return false;
+    char dev[256] = "", no[64] = "";
+    DWORD t = 0, n1 = sizeof(dev) - 1, n2 = sizeof(no) - 1;
+    if (real_RQVA(hKey, play ? "VoiceChatPlayDev" : "VoiceChatRecDev", NULL, &t,
+                  (LPBYTE)dev, &n1) != ERROR_SUCCESS || t != REG_SZ || !dev[0])
+        return false;
+    int stored = -1;
+    if (real_RQVA(hKey, name, NULL, &t, (LPBYTE)no, &n2) == ERROR_SUCCESS && t == REG_SZ)
+        stored = atoi(no);
+    const DevList* l = fmodev_list(rec);
+    int want = -1;
+    for (int i = 0; i < l->n; i++)
+        if (strcmp(l->names[i], dev) == 0) { want = i; break; }
+    if (want < 0 || want == stored) return false;
+    static LONG said[2] = { 0, 0 };
+    if (InterlockedExchange(&said[rec ? 1 : 0], 1) == 0)
+        logf("[fmovoice] %s: saved index %d does not name '%s' in FMO's list (no Primary "
+             "entry) -- serving %d (registry untouched)", name, stored, dev, want);
+    _snprintf_s(out, cb, _TRUNCATE, "%d", want);
+    return true;
+}
+
 static LONG serve_szW(const wchar_t* v, LPDWORD lpType, LPBYTE lpData, LPDWORD lpcbData)
 {
     DWORD need = (DWORD)((wcslen(v) + 1) * sizeof(wchar_t));
@@ -624,6 +705,7 @@ void swapconfirm_configure(const wchar_t* ini)
     g_swapt      = GetPrivateProfileIntW(L"inputmode", L"swap_trace",   0, ini);
     g_forcepad   = GetPrivateProfileIntW(L"inputmode", L"force_pad",       0, ini);
     g_seedpad    = GetPrivateProfileIntW(L"inputmode", L"seed_pad",        1, ini);
+    g_fmodev     = GetPrivateProfileIntW(L"fmovoice", L"fix_devices",      1, ini);
     g_seedtrace  = GetPrivateProfileIntW(L"inputmode", L"seed_pad_trace",  0, ini);
     if (g_seedpad)
         logf("[seedpad] on -- %d measured pad value(s) available to titles whose "
@@ -1235,6 +1317,10 @@ static LONG WINAPI hook_RQVA(HKEY hKey, LPCSTR name, LPDWORD reserved,
     { DWORD ms; if (name && ffxi3d_menu_size(hKey, name, NULL, &ms))
         return serve_dword(ms, lpType, lpData, lpcbData); }
 
+    { char fixed[16];                     // [fmovoice] fix_devices
+      if (fmodev_fix(hKey, name, fixed, sizeof(fixed)))
+          return serve_szA(fixed, lpType, lpData, lpcbData); }
+
     // seed_pad: supply a measured value the title asked for and the registry does
     // not have. Absent ONLY -- anything already stored wins, always.
     if (real_RQVA && name) {
@@ -1542,9 +1628,9 @@ void installdir_eat_patch()
 }
 
 void* installdir_real_RegQueryValueExA() { return (void*)real_RQVA; }
-void* installdir_hook_RegQueryValueExA() { return (g_on || swap_active() || g_forcepad || g_seedpad || g_rs_n || g_ffxi3d) ? (void*)hook_RQVA : NULL; }
+void* installdir_hook_RegQueryValueExA() { return (g_on || swap_active() || g_forcepad || g_seedpad || g_rs_n || g_ffxi3d || g_fmodev) ? (void*)hook_RQVA : NULL; }
 void* installdir_real_RegQueryValueExW() { return (void*)real_RQVW; }
-void* installdir_hook_RegQueryValueExW() { return (g_on || swap_active() || g_forcepad || g_seedpad || g_rs_n || g_ffxi3d) ? (void*)hook_RQVW : NULL; }
+void* installdir_hook_RegQueryValueExW() { return (g_on || swap_active() || g_forcepad || g_seedpad || g_rs_n || g_ffxi3d || g_fmodev) ? (void*)hook_RQVW : NULL; }
 
 // --- init helpers -----------------------------------------------------------
 
