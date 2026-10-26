@@ -456,6 +456,17 @@ static void arm_title_hooks_late(void)
     // The gW path-parser fix. TM.dll is ASProtect-packed, so the LDR/IAT path is
     // too early and the site only matches after the POL1 stub unpacks .text. It
     // MUST land before the resource glob, so it is armed from this hot path.
+    // SE's FMO voice playback-device check (fmofix.cpp): the same late window,
+    // for the same reason -- FrontMissionOnline.dll is ASProtect-packed too.
+    if (fmofix_enabled()) {
+        HMODULE fmo = GetModuleHandleW(L"FrontMissionOnline.dll");
+        if (fmo) {
+            char leaf[64];
+            module_leaf(fmo, leaf, sizeof(leaf));
+            fmofix_apply_module((void*)fmo, leaf);
+        }
+    }
+
     if (tmpathfix_enabled()) {
         HMODULE tm = GetModuleHandleW(L"TM.dll");
         if (tm) {
@@ -1929,6 +1940,7 @@ static void startup()
     profiles_log_table();
     polfetch_configure(ini);
     fmokey_configure(ini);
+    fmofix_init(ini);           // [fmovoice] fix_playdev -- SE's playback-device check uses the recording list (default ON)
     tmpathfix_init(ini);        // [dx] tm_pathfix -- TM gW path parser fix (default ON, no-op unless the site matches)
     reslock_init(ini);          // [polshim] reslock -- GlobalLock on a resource pointer returns it as-is (FMO Deck game-start fix)
     flwindow_init(ini);         // [dx] fl_window_transparent -- key out the Friend List window's black surround on the Deck

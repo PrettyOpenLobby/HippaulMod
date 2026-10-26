@@ -1594,3 +1594,9 @@ int   protondxvk_apply_to(const char* proton_dir);
 // wined3d is loaded on a healthy DXVK session too (measured 2026-09-07).
 void  protondxvk_report_d3d8(void);
 
+// --- fmofix.cpp: one-instruction fixes to proven bugs in SE's FMO client ----------
+// fix_playdev: the voice playback device was checked against the RECORDING list,
+// so no modern machine could keep one (settings box empty, mic test never starts).
+void fmofix_init(const wchar_t* ini);
+void fmofix_apply_module(void* module_base, const char* module);
+int  fmofix_enabled();
