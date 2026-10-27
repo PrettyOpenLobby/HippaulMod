@@ -749,7 +749,7 @@ static int WINAPI hook_send(UINT_PTR s, const char* buf, int len, int flags)
 // our server it does NOT: the client compares its own installed version to whatever
 // LATEST the patch server advertises in the POLP cmd8 reply, and ours always advertises
 // its newest build. So we neutralise the reply instead -- find the advertised version
-// token (8 date digits + '_' + a letter, e.g. "20110829_G") and zero the date to
+// token (8 date digits + '_' + a letter or digit, e.g. "20110829_G", "20261025_1") and zero the date to
 // "00000000", which is older than any real install, so the client concludes it is
 // current and never patches. Same-length edit; only the POLP checksum
 // (u32_LE(MD5(frame[8:])[:4]) at offset 4) is recomputed. In-place on the recv buffer.
@@ -772,8 +772,11 @@ static void noupdate_reply_fix(UINT_PTR s, char* buf, int n)
             bool datey = true;
             for (int k = 0; k < 8; k++) if (p[k] < '0' || p[k] > '9') { datey = false; break; }
             if (!datey || p[8] != '_') continue;
+            // A letter OR a digit: SE's builds end in a letter (20110829_E) but our
+            // self-hosted Viewer builds end in a digit (20261025_1), and a letter-only
+            // test let every one of those through, so noupdate stopped blocking anything.
             char c = p[9];
-            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) continue;
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) continue;
             if (memcmp(p, "00000000", 8) == 0) continue;   // already neutralised
             memcpy(frame + j, "00000000", 8);              // older than any install
             changed = true;
