@@ -563,6 +563,36 @@ int g_capture_max = 256;
 // high so the server answers "current" and never overwrites the local polhook.dll.
 static int g_noupdate = 0;
 
+// [patch] legacy_channel -- route the Viewer's version check onto a SEPARATE patch
+// channel (region code) so the server can answer it "you are already current" from a
+// legacy ("Navigator-era") tree without touching the live one every other Viewer uses.
+// Off by default; set only in the XP/legacy build. g_legacy_region is the 3-char code
+// the stamp writes (default "W2L"); the server lists it in POLP_CURRENT (the same
+// per-region switch the PS2/360 pins use), so it is isolated from the live "W2U" channel.
+static int  g_legacy_channel = 0;
+static char g_legacy_region[8] = "W2L";
+
+// XP (and Server 2003) report OS major < 6. The legacy channel defaults ON there, because
+// the pre-SSE2 machines that still run the old Viewer are exactly the ones a live-channel
+// "update needed" bricks. Read the version from the registry, NOT GetVersionEx, which lies
+// to an unmanifested process (same reason polreport.cpp's meta_os does). Unknown -> treat
+// as modern (OFF), so a failed read never drags a current PC onto the legacy channel. An
+// explicit [patch] legacy_channel= in the ini still overrides, either way.
+static bool os_is_xp_era()
+{
+    char ver[32] = "";
+    HKEY k;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0,
+                      KEY_READ, &k) == ERROR_SUCCESS) {
+        DWORD cb = sizeof(ver) - 1, type = 0;
+        RegQueryValueExA(k, "CurrentVersion", NULL, &type, (LPBYTE)ver, &cb);
+        RegCloseKey(k);
+    }
+    int major = atoi(ver);          // "5.1" -> 5, "10.0" -> 10, "" -> 0
+    return major != 0 && major < 6; // 5.x = XP / Server 2003; 0 = unknown -> modern
+}
+
 static void log_payload(const char* tag, UINT_PTR s, const char* buf, int len)
 {
     if (!g_capture || len <= 0 || !buf) return;
@@ -669,6 +699,37 @@ static bool noupdate_pin(const char* buf, int len, char* out, int outcap)
     return true;
 }
 
+// --- [patch] legacy_channel: move the Viewer onto the legacy patch tree (SEND side) ---
+// The Viewer's POLP cmd7 carries the patch REGION at 0x10 and the product at 0x14. The
+// live Viewer tree (region "W2U", product "1000") always advertises our newest build, so
+// an old client -- a pre-SSE2 XP box on a Navigator-era Viewer -- is told to update and
+// bricks. We cannot pin that channel without freezing every regular PC Viewer with it,
+// because the server's reply is per (region, product), not per client version. So stamp
+// the REGION to g_legacy_region ("W2L" by default): the server lists W2L/1000 in
+// POLP_CURRENT and answers "you are already current" (echoing the client's own build),
+// the same per-region switch the PS2/360 pins use, leaving the live "W2U" channel alone.
+// Scoped to the Viewer product like noupdate_pin -- a game title's own check is left be.
+// Same-length region edit (4-byte field at 0x10); only the POLP checksum at offset 4 is
+// recomputed. The version at 0x18 is NOT touched: the legacy channel echoes the client's
+// own build back as "latest", so it sees itself current without rewriting its patch.ver.
+static bool legacy_stamp(const char* buf, int len, char* out, int outcap)
+{
+    if (!g_legacy_channel || !buf || len < 0x18 || len > outcap) return false;
+    if (memcmp(buf + 8, "POLP", 4) != 0) return false;
+    DWORD cmd; memcpy(&cmd, buf + 12, 4);
+    if (cmd != 7) return false;
+    if (memcmp(buf + 0x14, "1000", 4) != 0) return false;      // Viewer product only
+    char reg[4] = { 0, 0, 0, 0 };                              // the 4-byte region field
+    for (int i = 0; i < 4 && g_legacy_region[i]; i++) reg[i] = g_legacy_region[i];
+    if (memcmp(buf + 0x10, reg, 4) == 0) return false;         // already on the legacy region
+    memcpy(out, buf, len);
+    memcpy(out + 0x10, reg, 4);                                // stamp the legacy region
+    BYTE ck[4];
+    if (!md5_first4((const BYTE*)out + 8, len - 8, ck)) return false;
+    memcpy(out + 4, ck, 4);                                    // fix the packet checksum
+    return true;
+}
+
 // Log every buffer of a WSABUF array as one payload each: the scatter/gather
 // vector is how the caller chose to split ONE message, and joining them here
 // would invent a framing the wire never had.
@@ -728,6 +789,14 @@ static int WINAPI hook_send(UINT_PTR s, const char* buf, int len, int flags)
     // record NON-Viewer products too, since that is exactly what it has to be able
     // to recognise and leave alone.
     if (g_noupdate) noupd_note_request(s, buf, len);
+    // Legacy channel takes precedence over noupdate: it moves the whole version check to
+    // a channel the server answers as "current", so there is nothing left to pin.
+    char stamped[512];
+    if (legacy_stamp(buf, len, stamped, sizeof(stamped))) {
+        logf("[patch] legacy_channel: Viewer version check routed to the '%s' channel", g_legacy_region);
+        log_flush();
+        return real_send(s, stamped, len, flags);
+    }
     char pinned[512];
     if (noupdate_pin(buf, len, pinned, sizeof(pinned))) {
         logf("[patch] noupdate: Viewer version check pinned -- no auto-patch this launch");
@@ -1759,6 +1828,15 @@ static void startup()
     fepatch_set_enabled(minimal ? 0 : GetPrivateProfileIntW(L"dx", L"fe_teardown_guard", 0, ini));
     g_capture     = GetPrivateProfileIntW(L"polshim", L"capture",     0,   ini);
     g_noupdate    = GetPrivateProfileIntW(L"patch",   L"noupdate",    0,   ini);
+    g_legacy_channel = GetPrivateProfileIntW(L"patch", L"legacy_channel",
+                                             os_is_xp_era() ? 1 : 0, ini);   // XP defaults ON
+    {
+        wchar_t lr[16] = L"";
+        ini_str(L"patch", L"legacy_region", L"W2L", lr, _countof(lr), ini);
+        char code[8] = { 0 };                                  // ASCII region code, <=3 chars
+        for (int i = 0; i < 3 && lr[i] > 0 && lr[i] < 128; i++) code[i] = (char)lr[i];
+        if (code[0]) { memset(g_legacy_region, 0, sizeof(g_legacy_region)); memcpy(g_legacy_region, code, 4); }
+    }
     g_comproxy    = GetPrivateProfileIntW(L"polshim", L"comproxy",    0,   ini);
     g_capture_max = GetPrivateProfileIntW(L"polshim", L"capture_max", 256, ini);
     // Accepts decimal or 0x-prefixed hex (GetPrivateProfileInt is decimal-only).
@@ -2037,6 +2115,23 @@ static void startup()
     tmpathfix_eat_patch();      // EAT-patch kernel32!FindFirstFileA: catch TM's gW glob to patch the parser pre-index
     netredir_init(ini);         // reads [redirect]; no-op unless enable=1
     netredir_resolve();         // ditto -- must precede sweep_loaded() as well
+    netredir_eat_patch();       // MUST follow netredir_resolve(): rewrites ws2_32's export
+                                // table (captured genuine ptr first). polcore has no import
+                                // directory (POL1 packer), so the IAT route below can never
+                                // reach its gethostbyname -- same case as installdir below.
+    // [patch] legacy_channel needs the SEND hook inside polcore too (it stamps the Viewer's
+    // POLP cmd7 region on its way out). polcore resolves send() by ordinal through the same
+    // POL1 packer, so the IAT route misses it -- EAT-patch ws2_32!send exactly as above.
+    // real_send was captured by GetProcAddress at module resolve, before this rewrite, so
+    // hook_send's fall-through reaches genuine code and never recurses. Gated so a regular
+    // build never routes the hot send() path through the EAT.
+    if (g_legacy_channel && real_send) {
+        HMODULE ws2l = GetModuleHandleW(L"ws2_32.dll");
+        if (ws2l)
+            dx_eat_patch_export(ws2l, "send", (void*)hook_send,
+                                "ws2_32!send (legacy_channel: stamp the Viewer's POLP region "
+                                "past polcore's POL1 packer, same route as gethostbyname)");
+    }
     installdir_init(ini);       // reads [installdir]; folder-aware install redirect, no-op unless enable=1
     swapconfirm_configure(ini); // reads [inputmode] swap_confirm; rides the RegQueryValueEx hooks
     regserve_configure(ini);    // reads [reg:...]; rides the SAME hooks, so it must precede installdir_resolve
@@ -2167,6 +2262,15 @@ void shim_reload(const wchar_t* ini)
     fepatch_set_enabled(GetPrivateProfileIntW(L"dx", L"fe_teardown_guard", 0, ini));
     g_capture     = GetPrivateProfileIntW(L"polshim", L"capture",     0,   ini);
     g_noupdate    = GetPrivateProfileIntW(L"patch",   L"noupdate",    0,   ini);
+    g_legacy_channel = GetPrivateProfileIntW(L"patch", L"legacy_channel",
+                                             os_is_xp_era() ? 1 : 0, ini);   // XP defaults ON
+    {
+        wchar_t lr[16] = L"";
+        ini_str(L"patch", L"legacy_region", L"W2L", lr, _countof(lr), ini);
+        char code[8] = { 0 };                                  // ASCII region code, <=3 chars
+        for (int i = 0; i < 3 && lr[i] > 0 && lr[i] < 128; i++) code[i] = (char)lr[i];
+        if (code[0]) { memset(g_legacy_region, 0, sizeof(g_legacy_region)); memcpy(g_legacy_region, code, 4); }
+    }
     g_comproxy    = GetPrivateProfileIntW(L"polshim", L"comproxy",    0,   ini);
     g_capture_max = GetPrivateProfileIntW(L"polshim", L"capture_max", 256, ini);
     {

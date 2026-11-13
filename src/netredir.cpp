@@ -185,6 +185,33 @@ void netredir_resolve()
 void* netredir_real_gethostbyname() { return (void*)real_gethostbyname; }
 void* netredir_hook_gethostbyname() { return g_redirect ? (void*)hook_gethostbyname : NULL; }
 
+// EAT patch: the IAT route (inject.cpp's map[]) CANNOT reach polcore.dll -- it has
+// no import directory at all (POL1 packer builds its import table at runtime and
+// resolves every API fresh), so the gethostbyname hook is never installed in it and
+// the stock patch host `pt008.pol.com` resolves UNREDIRECTED to Square Enix. The
+// Viewer's patch/version check lives in polcore, so without this the redirect does
+// nothing for it -- the client reaches SE, is told to update, and never touches the
+// private server (measured on an XP tester, 2026-11-13: zero gethostbyname hook in
+// the log, zero cmd7 reaching our patch server).
+//
+// So patch the SOURCE -- ws2_32's own export table -- exactly as installdir does for
+// advapi32!RegQueryValueEx and d3d8 does for Direct3DCreate8, and for the identical
+// reason. Every resolution path reads the EAT, including the packer stub walking it
+// by ordinal (polcore imports gethostbyname by ordinal 52). netredir_resolve()
+// captured the genuine pointer BEFORE this rewrites the table it was read from, so
+// hook_gethostbyname's fall-through reaches real code and never recurses -- the
+// caller MUST run netredir_resolve() first (inject.cpp enforces the order).
+void netredir_eat_patch()
+{
+    if (!g_redirect) return;             // stay out of the EAT when the redirect is off
+    if (!real_gethostbyname) return;     // netredir_resolve() must have run first
+    HMODULE ws2 = GetModuleHandleW(L"ws2_32.dll");   // already mapped; no load under the lock
+    if (!ws2) return;
+    dx_eat_patch_export(ws2, "gethostbyname", (void*)hook_gethostbyname,
+                        "ws2_32!gethostbyname (beats polcore's POL1 packer "
+                        "resolving it at runtime)");
+}
+
 // Launch-time server override sources (Steam Deck sets these in the game's launch
 // options). Both return the IP in network byte order, or INADDR_NONE if absent.
 static unsigned long server_from_env()

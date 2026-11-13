@@ -626,6 +626,8 @@ int   d3d_title_fmv_adopt(void);
 // tell the hosts apart. Off unless [redirect] enable=1.
 void  netredir_init(const wchar_t* ini);
 void  netredir_resolve();
+void  netredir_eat_patch();  // EAT-patch ws2_32!gethostbyname: polcore has NO import
+                             // directory (POL1 packer), so the IAT route never reaches it
 int   netredir_enabled();
 int   netredir_se_bypass();                        // raw [redirect] enable: bypassing to REAL SE
 unsigned long netredir_effective_addr(const char*); // what the VIEWER resolves; 0 = no opinion
