@@ -700,33 +700,39 @@ static bool noupdate_pin(const char* buf, int len, char* out, int outcap)
 }
 
 // --- [patch] legacy_channel: move the Viewer onto the legacy patch tree (SEND side) ---
-// The Viewer's POLP cmd7 carries the patch REGION at 0x10 and the product at 0x14. The
-// live Viewer tree (region "W2U", product "1000") always advertises our newest build, so
-// an old client -- a pre-SSE2 XP box on a Navigator-era Viewer -- is told to update and
-// bricks. We cannot pin that channel without freezing every regular PC Viewer with it,
-// because the server's reply is per (region, product), not per client version. So stamp
-// the REGION to g_legacy_region ("W2L" by default): the server lists W2L/1000 in
-// POLP_CURRENT and answers "you are already current" (echoing the client's own build),
-// the same per-region switch the PS2/360 pins use, leaving the live "W2U" channel alone.
-// Scoped to the Viewer product like noupdate_pin -- a game title's own check is left be.
-// Same-length region edit (4-byte field at 0x10); only the POLP checksum at offset 4 is
-// recomputed. The version at 0x18 is NOT touched: the legacy channel echoes the client's
-// own build back as "latest", so it sees itself current without rewriting its patch.ver.
+// The old Navigator-era Viewer (pre-SSE2 XP box) hits the live "W2U"/1000 tree, which
+// always advertises our newest build, is told to update, and bricks. We cannot pin W2U
+// without freezing every regular PC Viewer. So stamp the patch REGION to g_legacy_region
+// ("W2L" by default): the server carries a separate W2L/1000 tree capped at the Navigator
+// build, so the old Viewer sees itself current while the live W2U channel is left alone.
+//
+// CRITICAL: the Viewer does NOT decide "current" from the version check alone. It sends a
+// WHOLE patch exchange -- cmd7 (version check), then cmd1 (get the file list), then cmd3
+// (download each file) -- and EVERY one of those carries the region, so EVERY one must be
+// stamped or the unstamped request leaks back to W2U and pulls the live file list (measured
+// 2026-11-13: cmd7 was stamped + answered current, but the follow-up cmd1 went to W2U and
+// fetched the 2026 list -> the Viewer updated anyway). The region offset differs by command:
+// 0x10 for cmd7/cmd1, 0x18 for cmd3 (server polserver2.py dispatch). Product ("1000") sits
+// right after it. Same-length region edit; only the POLP checksum at offset 4 is recomputed.
 static bool legacy_stamp(const char* buf, int len, char* out, int outcap)
 {
     if (!g_legacy_channel || !buf || len < 0x18 || len > outcap) return false;
     if (memcmp(buf + 8, "POLP", 4) != 0) return false;
     DWORD cmd; memcpy(&cmd, buf + 12, 4);
-    if (cmd != 7) return false;
-    if (memcmp(buf + 0x14, "1000", 4) != 0) return false;      // Viewer product only
-    char reg[4] = { 0, 0, 0, 0 };                              // the 4-byte region field
+    int regoff, prodoff;
+    if (cmd == 7 || cmd == 1) { regoff = 0x10; prodoff = 0x14; }  // version check / list request
+    else if (cmd == 3)        { regoff = 0x18; prodoff = 0x1c; }  // file download
+    else return false;                                            // other commands left alone
+    if (len < prodoff + 4) return false;                          // region+product must be present
+    if (memcmp(buf + prodoff, "1000", 4) != 0) return false;      // Viewer product only
+    char reg[4] = { 0, 0, 0, 0 };                                 // the 4-byte region field
     for (int i = 0; i < 4 && g_legacy_region[i]; i++) reg[i] = g_legacy_region[i];
-    if (memcmp(buf + 0x10, reg, 4) == 0) return false;         // already on the legacy region
+    if (memcmp(buf + regoff, reg, 4) == 0) return false;          // already on the legacy region
     memcpy(out, buf, len);
-    memcpy(out + 0x10, reg, 4);                                // stamp the legacy region
+    memcpy(out + regoff, reg, 4);                                 // stamp the legacy region
     BYTE ck[4];
     if (!md5_first4((const BYTE*)out + 8, len - 8, ck)) return false;
-    memcpy(out + 4, ck, 4);                                    // fix the packet checksum
+    memcpy(out + 4, ck, 4);                                       // fix the packet checksum
     return true;
 }
 
@@ -2115,22 +2121,49 @@ static void startup()
     tmpathfix_eat_patch();      // EAT-patch kernel32!FindFirstFileA: catch TM's gW glob to patch the parser pre-index
     netredir_init(ini);         // reads [redirect]; no-op unless enable=1
     netredir_resolve();         // ditto -- must precede sweep_loaded() as well
-    netredir_eat_patch();       // MUST follow netredir_resolve(): rewrites ws2_32's export
-                                // table (captured genuine ptr first). polcore has no import
-                                // directory (POL1 packer), so the IAT route below can never
-                                // reach its gethostbyname -- same case as installdir below.
-    // [patch] legacy_channel needs the SEND hook inside polcore too (it stamps the Viewer's
-    // POLP cmd7 region on its way out). polcore resolves send() by ordinal through the same
-    // POL1 packer, so the IAT route misses it -- EAT-patch ws2_32!send exactly as above.
-    // real_send was captured by GetProcAddress at module resolve, before this rewrite, so
-    // hook_send's fall-through reaches genuine code and never recurses. Gated so a regular
-    // build never routes the hot send() path through the EAT.
+    netredir_eat_patch();       // rewrites ws2_32's export table (belt); genuine ptr captured first
+    netredir_inline_hook();     // THE one that catches packed polcore: inline-patches
+                                // ws2_32!gethostbyname's CODE. The EAT/IAT routes both MISS the
+                                // packed Viewer (measured 2026-11-13: it reached SE anyway); the
+                                // code patch does not. Proven locally -- the panel Viewer's check
+                                // reached our server once this was in. MUST follow netredir_resolve().
+    // [patch] legacy_channel needs the SEND path hooked inside polcore/app.dll too -- it stamps
+    // the Viewer's POLP cmd7 region (W2U -> the legacy channel) on the way out. The EAT route
+    // misses the packed modules exactly like gethostbyname did, so INLINE-hook ws2_32!send the
+    // same way: steal its 5-byte hotpatch prologue (8B FF 55 8B EC), E9 to hook_send, and point
+    // real_send at a trampoline so hook_send's fall-through runs the genuine send and never
+    // recurses. Gated on legacy_channel so a regular build never touches the hot send() path.
     if (g_legacy_channel && real_send) {
         HMODULE ws2l = GetModuleHandleW(L"ws2_32.dll");
-        if (ws2l)
-            dx_eat_patch_export(ws2l, "send", (void*)hook_send,
-                                "ws2_32!send (legacy_channel: stamp the Viewer's POLP region "
-                                "past polcore's POL1 packer, same route as gethostbyname)");
+        BYTE* sfn = ws2l ? (BYTE*)GetProcAddress(ws2l, "send") : NULL;
+        static const BYTE SEND_HOTPATCH[5] = { 0x8B, 0xFF, 0x55, 0x8B, 0xEC };
+        if (sfn && memcmp(sfn, SEND_HOTPATCH, 5) == 0) {
+            BYTE* tramp = (BYTE*)VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE,
+                                              PAGE_EXECUTE_READWRITE);
+            if (tramp) {
+                memcpy(tramp, sfn, 5);
+                tramp[5] = 0xE9;                       // jmp rel32 back to send+5
+                *(DWORD*)(tramp + 6) = (DWORD)((ULONG_PTR)(sfn + 5) - (ULONG_PTR)(tramp + 10));
+                real_send = (PFN_SEND)tramp;           // trampoline, not sfn (about to be patched)
+                BYTE patch[5];
+                patch[0] = 0xE9;                       // jmp rel32 -> hook_send
+                *(DWORD*)(patch + 1) = (DWORD)((ULONG_PTR)hook_send - (ULONG_PTR)(sfn + 5));
+                DWORD old;
+                if (VirtualProtect(sfn, 5, PAGE_EXECUTE_READWRITE, &old)) {
+                    memcpy(sfn, patch, 5);
+                    VirtualProtect(sfn, 5, old, &old);
+                    FlushInstructionCache(GetCurrentProcess(), sfn, 5);
+                    logf("[patch] ws2_32!send INLINE-hooked @ %p (trampoline %p) -- legacy_channel "
+                         "region stamp now reaches packed polcore/app.dll: %s", sfn, tramp,
+                         memcmp(sfn, patch, 5) == 0 ? "armed" : "WRITE VERIFY FAILED");
+                    log_flush();
+                }
+            }
+        } else if (sfn) {
+            logf("[patch] ws2_32!send prologue %02X %02X %02X %02X %02X != 8B FF 55 8B EC -- NOT "
+                 "inline-hooking send (legacy stamp inactive this run).",
+                 sfn[0], sfn[1], sfn[2], sfn[3], sfn[4]);
+        }
     }
     installdir_init(ini);       // reads [installdir]; folder-aware install redirect, no-op unless enable=1
     swapconfirm_configure(ini); // reads [inputmode] swap_confirm; rides the RegQueryValueEx hooks

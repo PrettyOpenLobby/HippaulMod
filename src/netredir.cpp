@@ -212,6 +212,65 @@ void netredir_eat_patch()
                         "resolving it at runtime)");
 }
 
+// INLINE CODE HOOK on ws2_32!gethostbyname -- the one that actually catches the
+// packed Viewer. The EAT patch above rewrites the export TABLE, but MEASURED
+// 2026-11-13 on the real 1.10.00c Viewer, polcore still reaches the genuine
+// gethostbyname (calling it from polcore.dll+0x13736 and connecting to Square
+// Enix) despite the export patch -- it holds the function's address from past
+// our table rewrite. Patching the FUNCTION'S CODE is immune to how or when the
+// caller resolved its address, and a harness INT3 at this same entry proved it
+// catches polcore's call. ws2_32!gethostbyname begins with the 5-byte hotpatch
+// prologue `8B FF 55 8B EC` on every supported Windows -- three whole
+// instructions, exactly an E9 rel32 wide. Steal those 5 for a jmp to our hook;
+// a leaked RWX trampoline (the 5 bytes + E9 back to fn+5) becomes
+// real_gethostbyname so the hook's fall-through runs the genuine resolver
+// without recursing. If the prologue is ever NOT that pattern we DO NOT patch.
+// PROVEN end-to-end locally 2026-11-13: with this installed the panel Viewer's
+// patch check reached our server (cmd7 W2U/1000 from the test box).
+static bool g_ghbn_inline_hooked = false;
+void netredir_inline_hook()
+{
+    if (!g_redirect || g_ghbn_inline_hooked) return;
+    // Use the GENUINE pointer netredir_resolve() captured, NOT a fresh
+    // GetProcAddress: netredir_eat_patch() runs first and rewrites ws2_32's
+    // export table, so GetProcAddress("gethostbyname") would now return OUR hook
+    // (hook_gethostbyname), and the prologue check would see the hook's bytes and
+    // refuse (measured 2026-11-13: prologue 83 3D ... != 8B FF 55 8B EC). resolve()
+    // ran before the EAT patch, so real_gethostbyname is the real function.
+    if (!real_gethostbyname) return;
+    BYTE* fn = (BYTE*)real_gethostbyname;
+    static const BYTE HOTPATCH[5] = { 0x8B, 0xFF, 0x55, 0x8B, 0xEC };
+    if (memcmp(fn, HOTPATCH, 5) != 0) {
+        logf("[dns] ws2_32!gethostbyname prologue %02X %02X %02X %02X %02X != "
+             "8B FF 55 8B EC -- NOT inline-hooking (leaving IAT/EAT only).",
+             fn[0], fn[1], fn[2], fn[3], fn[4]);
+        return;
+    }
+    BYTE* tramp = (BYTE*)VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE,
+                                      PAGE_EXECUTE_READWRITE);
+    if (!tramp) { logf("[dns] inline hook: VirtualAlloc failed err=%lu", GetLastError()); return; }
+    memcpy(tramp, fn, 5);
+    tramp[5] = 0xE9;                                  // jmp rel32 back to fn+5
+    *(DWORD*)(tramp + 6) = (DWORD)((ULONG_PTR)(fn + 5) - (ULONG_PTR)(tramp + 10));
+    real_gethostbyname = (PFN_GHBN)tramp;             // trampoline, NOT fn (about to be patched)
+    BYTE patch[5];
+    patch[0] = 0xE9;                                  // jmp rel32 -> hook_gethostbyname
+    *(DWORD*)(patch + 1) = (DWORD)((ULONG_PTR)hook_gethostbyname - (ULONG_PTR)(fn + 5));
+    DWORD old;
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        logf("[dns] inline hook: VirtualProtect failed err=%lu", GetLastError());
+        return;
+    }
+    memcpy(fn, patch, 5);
+    VirtualProtect(fn, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    g_ghbn_inline_hooked = (memcmp(fn, patch, 5) == 0);
+    logf("[dns] ws2_32!gethostbyname INLINE-hooked @ %p (trampoline %p) -- catches "
+         "polcore's call whatever path resolved it: %s", fn, tramp,
+         g_ghbn_inline_hooked ? "armed" : "WRITE VERIFY FAILED");
+    log_flush();
+}
+
 // Launch-time server override sources (Steam Deck sets these in the game's launch
 // options). Both return the IP in network byte order, or INADDR_NONE if absent.
 static unsigned long server_from_env()
