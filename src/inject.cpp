@@ -1906,6 +1906,30 @@ static void startup()
         for (int i = 0; i < 3 && lr[i] > 0 && lr[i] < 128; i++) code[i] = (char)lr[i];
         if (code[0]) { memset(g_legacy_region, 0, sizeof(g_legacy_region)); memcpy(g_legacy_region, code, 4); }
     }
+    // Patch-host redirect in env.dat. The Viewer's update check does NOT run in
+    // pol.exe -- pol.exe spawns util\startpol.exe /INIT and the check runs down
+    // that chain, where the in-process winsock redirect cannot reach it. But every
+    // one of those processes reads the patch host out of this install's env.dat.
+    // Rewriting that one field (PATCH_SERVER_DOMAIN) to a public host that points
+    // at us redirects the whole chain at launch, before startpol spawns, with
+    // nothing touched on the player's system. Default host when the legacy channel
+    // is on (the panel/XP case that needs it); [patch] patch_domain overrides, and
+    // an empty value with legacy OFF leaves env.dat alone. Idempotent. See polenv.cpp.
+    {
+        wchar_t pd[128] = L"";
+        ini_str(L"patch", L"patch_domain", L"", pd, _countof(pd), ini);
+        if (!pd[0] && g_legacy_channel) wcscpy_s(pd, _countof(pd), L"play.openlobby.fyi");
+        if (pd[0]) {
+            wchar_t root[MAX_PATH]; wcscpy_s(root, g_self_path);
+            wchar_t* sl = wcsrchr(root, L'\\');
+            if (sl) {
+                *sl = 0;                                   // dir of PolHook.dll = the Viewer root
+                char dom[128] = { 0 };
+                WideCharToMultiByte(CP_ACP, 0, pd, -1, dom, sizeof(dom), NULL, NULL);
+                polenv_redirect_patch_domain(root, dom);
+            }
+        }
+    }
     g_comproxy    = GetPrivateProfileIntW(L"polshim", L"comproxy",    0,   ini);
     g_capture_max = GetPrivateProfileIntW(L"polshim", L"capture_max", 256, ini);
     // Accepts decimal or 0x-prefixed hex (GetPrivateProfileInt is decimal-only).
@@ -2398,6 +2422,30 @@ void shim_reload(const wchar_t* ini)
         char code[8] = { 0 };                                  // ASCII region code, <=3 chars
         for (int i = 0; i < 3 && lr[i] > 0 && lr[i] < 128; i++) code[i] = (char)lr[i];
         if (code[0]) { memset(g_legacy_region, 0, sizeof(g_legacy_region)); memcpy(g_legacy_region, code, 4); }
+    }
+    // Patch-host redirect in env.dat. The Viewer's update check does NOT run in
+    // pol.exe -- pol.exe spawns util\startpol.exe /INIT and the check runs down
+    // that chain, where the in-process winsock redirect cannot reach it. But every
+    // one of those processes reads the patch host out of this install's env.dat.
+    // Rewriting that one field (PATCH_SERVER_DOMAIN) to a public host that points
+    // at us redirects the whole chain at launch, before startpol spawns, with
+    // nothing touched on the player's system. Default host when the legacy channel
+    // is on (the panel/XP case that needs it); [patch] patch_domain overrides, and
+    // an empty value with legacy OFF leaves env.dat alone. Idempotent. See polenv.cpp.
+    {
+        wchar_t pd[128] = L"";
+        ini_str(L"patch", L"patch_domain", L"", pd, _countof(pd), ini);
+        if (!pd[0] && g_legacy_channel) wcscpy_s(pd, _countof(pd), L"play.openlobby.fyi");
+        if (pd[0]) {
+            wchar_t root[MAX_PATH]; wcscpy_s(root, g_self_path);
+            wchar_t* sl = wcsrchr(root, L'\\');
+            if (sl) {
+                *sl = 0;                                   // dir of PolHook.dll = the Viewer root
+                char dom[128] = { 0 };
+                WideCharToMultiByte(CP_ACP, 0, pd, -1, dom, sizeof(dom), NULL, NULL);
+                polenv_redirect_patch_domain(root, dom);
+            }
+        }
     }
     g_comproxy    = GetPrivateProfileIntW(L"polshim", L"comproxy",    0,   ini);
     g_capture_max = GetPrivateProfileIntW(L"polshim", L"capture_max", 256, ini);
