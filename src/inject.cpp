@@ -26,6 +26,7 @@
 #include <winternl.h>
 #include <objbase.h>       // CLSIDFromString, for the [replace] map
 #include <wincrypt.h>      // CryptoAPI MD5, for the [patch] noupdate POLP checksum
+#include <intrin.h>        // __cpuid -- SSE3 detection for the legacy-channel CPU gate
 
 int   g_verbose   = 0;   // per-call COM logging; a diagnostic, off unless asked for
 int   g_max_slots = 128;
@@ -578,7 +579,7 @@ static char g_legacy_region[8] = "W2L";
 // to an unmanifested process (same reason polreport.cpp's meta_os does). Unknown -> treat
 // as modern (OFF), so a failed read never drags a current PC onto the legacy channel. An
 // explicit [patch] legacy_channel= in the ini still overrides, either way.
-static bool os_is_xp_era()
+bool os_is_xp_era()
 {
     char ver[32] = "";
     HKEY k;
@@ -591,6 +592,18 @@ static bool os_is_xp_era()
     }
     int major = atoi(ver);          // "5.1" -> 5, "10.0" -> 10, "" -> 0
     return major != 0 && major < 6; // 5.x = XP / Server 2003; 0 = unknown -> modern
+}
+
+// Does THIS CPU support SSE3? The current Viewer needs it; a pre-SSE3 machine (the
+// pre-SSE2/early-SSE2 boxes that still run the Navigator-era Viewer) cannot start it,
+// which is exactly who the legacy channel protects. CPUID leaf 1, ECX bit 0 = SSE3.
+// Used to force the legacy channel on (inject.cpp) and to grey its toggle out
+// (polsettings.cpp) so a user on such a CPU cannot switch off the only thing that runs.
+bool cpu_has_sse3()
+{
+    int info[4] = { 0, 0, 0, 0 };
+    __cpuid(info, 1);
+    return (info[2] & 0x1) != 0;    // ECX bit 0 == SSE3
 }
 
 static void log_payload(const char* tag, UINT_PTR s, const char* buf, int len)
@@ -1836,6 +1849,14 @@ static void startup()
     g_noupdate    = GetPrivateProfileIntW(L"patch",   L"noupdate",    0,   ini);
     g_legacy_channel = GetPrivateProfileIntW(L"patch", L"legacy_channel",
                                              os_is_xp_era() ? 1 : 0, ini);   // XP defaults ON
+    // A CPU without SSE3 cannot run the current Viewer, so the legacy channel is NOT
+    // optional there -- force it on regardless of the ini, so neither the settings
+    // toggle nor a hand-edit can strand that machine on a build it cannot start. The
+    // settings dialog greys the toggle out and says why (polsettings apply_mode_gates).
+    if (!g_legacy_channel && !cpu_has_sse3()) {
+        g_legacy_channel = 1;
+        logf("[patch] legacy_channel forced ON -- this CPU lacks SSE3 and cannot run the current Viewer");
+    }
     {
         wchar_t lr[16] = L"";
         ini_str(L"patch", L"legacy_region", L"W2L", lr, _countof(lr), ini);
@@ -2297,6 +2318,14 @@ void shim_reload(const wchar_t* ini)
     g_noupdate    = GetPrivateProfileIntW(L"patch",   L"noupdate",    0,   ini);
     g_legacy_channel = GetPrivateProfileIntW(L"patch", L"legacy_channel",
                                              os_is_xp_era() ? 1 : 0, ini);   // XP defaults ON
+    // A CPU without SSE3 cannot run the current Viewer, so the legacy channel is NOT
+    // optional there -- force it on regardless of the ini, so neither the settings
+    // toggle nor a hand-edit can strand that machine on a build it cannot start. The
+    // settings dialog greys the toggle out and says why (polsettings apply_mode_gates).
+    if (!g_legacy_channel && !cpu_has_sse3()) {
+        g_legacy_channel = 1;
+        logf("[patch] legacy_channel forced ON -- this CPU lacks SSE3 and cannot run the current Viewer");
+    }
     {
         wchar_t lr[16] = L"";
         ini_str(L"patch", L"legacy_region", L"W2L", lr, _countof(lr), ini);

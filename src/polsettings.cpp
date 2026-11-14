@@ -1880,6 +1880,21 @@ static void apply_mode_gates(void)
                           ? L"Tick \"Connect to REAL Square Enix\" first -- you export out of retail."
                           : L"Untick \"Connect to REAL Square Enix\" first -- this imports onto this server."));
     }
+    // legacy_channel CPU gate: a machine with no SSE3 cannot run the current Viewer, so
+    // the classic Viewer is not optional there. Show the toggle ticked, grey it out, and
+    // say why -- inject.cpp forces it on at config time regardless, this is the visible half.
+    if (!cpu_has_sse3()) {
+        for (int i = 0; i < n && i < (int)_countof(g_ctl); i++) {
+            const ShimOption& o = opts[i];
+            if (!o.sec || !o.key || !g_ctl[i]) continue;
+            if (_wcsicmp(o.sec, L"patch") != 0 || _wcsicmp(o.key, L"legacy_channel") != 0) continue;
+            SendMessageW(g_ctl[i], BM_SETCHECK, BST_CHECKED, 0);
+            EnableWindow(g_ctl[i], FALSE);
+            HWND hint = GetDlgItem(g_pane, IDC_HINT_FIRST + i);
+            if (hint) SetWindowTextW(hint, L"Your CPU can't run the current Viewer, so the classic Viewer is required.");
+            break;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

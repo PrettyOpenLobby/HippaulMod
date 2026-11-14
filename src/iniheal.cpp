@@ -827,8 +827,15 @@ static const ShimOption g_opts[] = {
   // autoupdate_boot_guard -- the ini-defaults check holds the two together.
   { L"autoupdate", L"confirm_ms",     L"20000", OPT_HIDDEN, L"How long a staged build must survive to be confirmed (ms)", NULL },
   { L"autoupdate", L"rollback_after", L"2",     OPT_HIDDEN, L"Unconfirmed boots of a staged build before rolling back",   NULL },
-  { L"patch",     L"noupdate",       L"0",    OPT_BOOL, L"Never let POL patch the Viewer",   NULL, true,
-    L"Stops the Viewer overwriting a build you made yourself." },
+  { L"patch",     L"noupdate",       L"0",    OPT_BOOL, L"Block PlayOnline from updating the Viewer", NULL, false,
+    L"Stops PlayOnline's own patcher from changing your Viewer files. This is separate from HippaulMod's own updates above; leave it off unless you mean to keep a specific Viewer build." },
+  // legacy_channel: the ACTUAL default is platform-dependent (on under Windows XP, off
+  // otherwise) and is computed in inject.cpp; iniheal() below heals THIS key to that
+  // computed value rather than the flat "0" here, so XP users are not silently switched
+  // off the channel that keeps the old Viewer runnable. The toggle is greyed out on a
+  // CPU with no SSE3 (polsettings apply_mode_gates), where the current Viewer cannot run.
+  { L"patch",     L"legacy_channel", L"0",    OPT_BOOL, L"Stay on the classic Viewer (for older PCs)", NULL, false,
+    L"Keeps this older Viewer on its own update track so PlayOnline won't force it onto a newer build your PC can't run. On by default on Windows XP; turn it off only if your PC can run the current Viewer." },
 
   // Boot straight into a game, the way a title's own desktop shortcut does. The
   // stored value is the content id; a real polboot launch (or nothing selected)
@@ -1189,7 +1196,14 @@ void iniheal(const wchar_t* ini)
         // key into an absent-looking empty one and heal a default over the user's line.
         GetPrivateProfileStringW(g_opts[i].sec, g_opts[i].key, SENTINEL, cur, _countof(cur), ini);
         if (wcscmp(cur, SENTINEL) == 0) {               // key absent -> write its default
-            if (WritePrivateProfileStringW(g_opts[i].sec, g_opts[i].key, g_opts[i].def, ini))
+            const wchar_t* def = g_opts[i].def;
+            // legacy_channel's REAL default is platform-dependent (on for XP-era, off
+            // otherwise) and computed in inject.cpp. Heal it to that value, not the flat
+            // "0" in the table -- writing 0 here would silently disable the XP protection
+            // for every XP user the first time their ini is healed.
+            if (!wcscmp(g_opts[i].sec, L"patch") && !wcscmp(g_opts[i].key, L"legacy_channel"))
+                def = os_is_xp_era() ? L"1" : L"0";
+            if (WritePrivateProfileStringW(g_opts[i].sec, g_opts[i].key, def, ini))
                 added++;
         }
     }

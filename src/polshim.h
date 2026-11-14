@@ -627,6 +627,8 @@ int   d3d_title_fmv_adopt(void);
 void  netredir_init(const wchar_t* ini);
 void  netredir_resolve();
 void  netredir_inline_hook();   // inline code-patch ws2_32!gethostbyname (catches packed polcore)
+bool  os_is_xp_era();           // Windows XP / Server 2003 (OS major < 6)
+bool  cpu_has_sse3();           // this CPU supports SSE3 (the current Viewer needs it)
 void  netredir_eat_patch();  // EAT-patch ws2_32!gethostbyname: polcore has NO import
                              // directory (POL1 packer), so the IAT route never reaches it
 int   netredir_enabled();
