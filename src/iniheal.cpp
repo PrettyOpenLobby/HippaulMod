@@ -836,6 +836,8 @@ static const ShimOption g_opts[] = {
   // CPU with no SSE3 (polsettings apply_mode_gates), where the current Viewer cannot run.
   { L"patch",     L"legacy_channel", L"0",    OPT_BOOL, L"Stay on the classic Viewer (for older PCs)", NULL, false,
     L"Keeps this older Viewer on its own update track so PlayOnline won't force it onto a newer build your PC can't run. On by default on Windows XP; turn it off only if your PC can run the current Viewer." },
+  { L"polshim",   L"netdiag",        L"0",    OPT_BOOL, L"Log network details (for troubleshooting)", NULL, false,
+    L"Adds detail about the Viewer's network activity to the log, to help support diagnose connection or update problems. Takes effect on the next launch. Leave it off unless support asks you to turn it on." },
 
   // Boot straight into a game, the way a title's own desktop shortcut does. The
   // stored value is the content id; a real polboot launch (or nothing selected)
