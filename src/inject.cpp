@@ -557,6 +557,16 @@ static PFN_SEND     real_send     = NULL;
 static PFN_RECV     real_recv     = NULL;
 static PFN_SENDTO   real_sendto   = NULL;
 static PFN_RECVFROM real_recvfrom = NULL;
+// [polshim] netdiag -- a one-off DIAGNOSTIC (off by default): the old Viewer's patch
+// check reaches the network by a path none of the normal hooks see (measured on an XP
+// tester 2026-11-13: build 238 armed, redirect active, capture on, yet ZERO send/recv/
+// resolve and no child process). To FIND that path without guessing, netdiag inline-hooks
+// ws2_32!connect (logs every TCP destination, whatever resolved it) and CreateProcess
+// (logs + injects any child, even a packed spawn the IAT route misses). One of those must
+// fire for any reachable check. connect() already has a logging hook + IAT entry; the
+// IAT route misses the packed Viewer, so netdiag INLINE-hooks connect to reach it, and
+// also inline-hooks CreateProcess to catch a packed patcher spawn. Set [polshim] netdiag=1.
+static int          g_netdiag     = 0;
 
 int g_capture     = 0;
 int g_capture_max = 256;
@@ -830,6 +840,37 @@ static int WINAPI hook_send(UINT_PTR s, const char* buf, int len, int flags)
         poltoken_tag(buf, len, tagged, (int)sizeof(tagged)))
         return real_send(s, tagged, len, flags);
     return real_send(s, buf, len, flags);
+}
+
+// Generic 5-byte-hotpatch inline hook (same rationale as netredir_inline_hook): patch
+// fn's prologue to E9-jmp to `hook`, return a leaked RWX trampoline (stolen prologue +
+// jmp fn+5) to call the original, or NULL if the prologue is not the hotpatch stub.
+static void* inline_hook_fn(void* fn, void* hook, const char* tag)
+{
+    if (!fn) return NULL;
+    BYTE* f = (BYTE*)fn;
+    static const BYTE HP[5] = { 0x8B, 0xFF, 0x55, 0x8B, 0xEC };
+    if (memcmp(f, HP, 5) != 0) {
+        logf("[netdiag] %s prologue %02X %02X %02X %02X %02X != hotpatch -- not hooked",
+             tag, f[0], f[1], f[2], f[3], f[4]);
+        return NULL;
+    }
+    BYTE* tr = (BYTE*)VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tr) return NULL;
+    memcpy(tr, f, 5);
+    tr[5] = 0xE9;
+    *(DWORD*)(tr + 6) = (DWORD)((ULONG_PTR)(f + 5) - (ULONG_PTR)(tr + 10));
+    BYTE patch[5]; patch[0] = 0xE9;
+    *(DWORD*)(patch + 1) = (DWORD)((ULONG_PTR)hook - (ULONG_PTR)(f + 5));
+    DWORD old;
+    if (!VirtualProtect(f, 5, PAGE_EXECUTE_READWRITE, &old)) return NULL;
+    memcpy(f, patch, 5);
+    VirtualProtect(f, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), f, 5);
+    logf("[netdiag] %s INLINE-hooked @ %p (trampoline %p): %s", tag, f, tr,
+         memcmp(f, patch, 5) == 0 ? "armed" : "WRITE VERIFY FAILED");
+    log_flush();
+    return (memcmp(f, patch, 5) == 0) ? (void*)tr : NULL;
 }
 
 // --- [patch] noupdate (REPLY side): the decisive half ---------------------------------
@@ -1846,6 +1887,7 @@ static void startup()
     patches_set_optional(minimal ? 0 : GetPrivateProfileIntW(L"polshim", L"patches_optional", 0, ini));
     fepatch_set_enabled(minimal ? 0 : GetPrivateProfileIntW(L"dx", L"fe_teardown_guard", 0, ini));
     g_capture     = GetPrivateProfileIntW(L"polshim", L"capture",     0,   ini);
+    g_netdiag     = GetPrivateProfileIntW(L"polshim", L"netdiag",     0,   ini);   // diagnostic: trace connect + child spawns
     g_noupdate    = GetPrivateProfileIntW(L"patch",   L"noupdate",    0,   ini);
     g_legacy_channel = GetPrivateProfileIntW(L"patch", L"legacy_channel",
                                              os_is_xp_era() ? 1 : 0, ini);   // XP defaults ON
@@ -2186,6 +2228,29 @@ static void startup()
                  sfn[0], sfn[1], sfn[2], sfn[3], sfn[4]);
         }
     }
+    // [polshim] netdiag: brute-force probe for the old Viewer's invisible patch path.
+    // Inline-hook ws2_32!connect (log every TCP destination, whatever resolver found it)
+    // and CreateProcessW/A (catch + inject even a packed patcher spawn the IAT route
+    // misses -- those hooks already log+inject, this just extends their reach). Off unless
+    // [polshim] netdiag=1; a diagnostic, not shipped-on.
+    if (g_netdiag) {
+        HMODULE ws2d = GetModuleHandleW(L"ws2_32.dll");
+        if (ws2d) {
+            void* t = inline_hook_fn((void*)GetProcAddress(ws2d, "connect"),
+                                     (void*)hook_connect, "ws2_32!connect");
+            if (t) real_connect = (PFN_CONNECT)t;
+        }
+        if (real_CreateProcessW) {
+            void* t = inline_hook_fn((void*)real_CreateProcessW,
+                                     (void*)hook_CreateProcessW, "kernel32!CreateProcessW");
+            if (t) real_CreateProcessW = (PFN_CPW)t;
+        }
+        if (real_CreateProcessA) {
+            void* t = inline_hook_fn((void*)real_CreateProcessA,
+                                     (void*)hook_CreateProcessA, "kernel32!CreateProcessA");
+            if (t) real_CreateProcessA = (PFN_CPA)t;
+        }
+    }
     installdir_init(ini);       // reads [installdir]; folder-aware install redirect, no-op unless enable=1
     swapconfirm_configure(ini); // reads [inputmode] swap_confirm; rides the RegQueryValueEx hooks
     regserve_configure(ini);    // reads [reg:...]; rides the SAME hooks, so it must precede installdir_resolve
@@ -2315,6 +2380,7 @@ void shim_reload(const wchar_t* ini)
     patches_set_optional(GetPrivateProfileIntW(L"polshim", L"patches_optional", 0, ini));
     fepatch_set_enabled(GetPrivateProfileIntW(L"dx", L"fe_teardown_guard", 0, ini));
     g_capture     = GetPrivateProfileIntW(L"polshim", L"capture",     0,   ini);
+    g_netdiag     = GetPrivateProfileIntW(L"polshim", L"netdiag",     0,   ini);   // diagnostic: trace connect + child spawns
     g_noupdate    = GetPrivateProfileIntW(L"patch",   L"noupdate",    0,   ini);
     g_legacy_channel = GetPrivateProfileIntW(L"patch", L"legacy_channel",
                                              os_is_xp_era() ? 1 : 0, ini);   // XP defaults ON
