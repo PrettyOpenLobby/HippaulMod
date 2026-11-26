@@ -1043,6 +1043,22 @@ int regfix_scan(char* out, size_t cch, int apply)
                 rep("      The registry is fine; the FILES are the problem. Check Files");
                 rep("      needs a non-empty file.txt in that exact folder, so the title");
                 rep("      stays invisible/unlaunchable until the path and files agree.");
+                // The crypto-tied pair plus the on-disk stamp -- the exact
+                // difference between a working install and a from-nothing stub, so
+                // a report's diag can tell which the Viewer is rejecting (e.g. FE
+                // "install the retail version" over an empty folder: a stub leaves
+                // patch.ver and Product unwritten, a real install carries both).
+                if (t->needs_interface) {
+                    char ival[80] = "";
+                    bool hi = read_sz(insub, t->id, ival, sizeof(ival));
+                    char pvp[MAX_PATH];
+                    _snprintf_s(pvp, sizeof(pvp), _TRUNCATE, "%s\\patch.ver", reg);
+                    bool hf = reg[0] && GetFileAttributesA(pvp) != INVALID_FILE_ATTRIBUTES;
+                    rep("      stamp: Interface\\%s=%s  Product\\%s=%s  patch.ver=%s",
+                        t->id, (hi && ival[0]) ? ival : "(absent)",
+                        t->id, value_exists(prsub, t->id) ? "present" : "ABSENT",
+                        hf ? "on disk" : "missing");
+                }
                 incomplete++;
                 continue;
             }

@@ -453,6 +453,30 @@ static void sec_windows(Out* o)
     out_fmt(o, "\n");
 }
 
+// --- POL title registry ----------------------------------------------------------
+// So much of whether a title installs and launches lives in the registry
+// (InstallFolder / Interface / Product / ContentsCLSID+IID) and the on-disk
+// patch.ver the Interface stamp decrypts, that a report which does not carry the
+// Viewer's own verdict starts every install bug from zero -- the FE "install the
+// retail version" over an empty folder being the case this was added for. It is
+// `regfix_scan` in its DRY-RUN form (apply=0): every registry write inside it is
+// gated on apply, and apply=0 stays allowed even under UAC virtualization, so it
+// describes the machine without changing it. It resolves the hive itself.
+static void sec_pol_titles(Out* o)
+{
+    out_fmt(o, "[pol-titles]\n");
+    if (!o->p || o->len + 8192 >= o->cap) {
+        out_fmt(o, "(skipped -- not enough room left in the diag buffer)\n\n");
+        return;
+    }
+    // regfix_scan NUL-terminates and never exceeds the cch it is given; leave a
+    // couple of bytes for the section's own trailing blank line.
+    int rc = regfix_scan(o->p + o->len, o->cap - o->len - 2, 0);
+    o->len += strlen(o->p + o->len);
+    if (rc < 0) out_fmt(o, "(POL title scan was unavailable)\n");
+    out_fmt(o, "\n");
+}
+
 // --- entry -----------------------------------------------------------------------
 char* sysdiag_collect(DWORD* out_len)
 {
@@ -471,6 +495,7 @@ char* sysdiag_collect(DWORD* out_len)
     sec_compat(&o);
     sec_windows(&o);
     sec_modules(&o);
+    sec_pol_titles(&o);
 
     out_fmt(&o, "[d3d8]\n");
     if (o.len + 4096 < o.cap) {
